@@ -1,0 +1,41 @@
+[Unit]
+Description=SimpleLogin.io clone web app server
+After=network.target
+
+[Service]
+# User and group to run the service as
+User=simplelogin
+Group=simplelogin
+
+# The working directory where your wsgi.py is located
+WorkingDirectory=/home/simplelogin/sl-app
+
+# The command to launch the Gunicorn server using the venv's gunicorn
+# Ensure that the venv exists at /home/simplelogin/sl-app/.venv
+#ExecStart=/home/simplelogin/sl-app/.venv/bin/gunicorn wsgi:app -b 0.0.0.0:7777 -w 2 --timeout 15
+ExecStart=/home/simplelogin/sl-app/.venv/bin/gunicorn wsgi:app -b 127.0.0.1:7777 --timeout 15
+
+# Restart the service if it fails
+Restart=on-failure
+# Wait 5 seconds before attempting to restart
+RestartSec=5
+
+# Optional: Graceful reload on 'systemctl reload simplelogin-gunicorn'
+# This sends a HUP signal to Gunicorn, which reloads workers without downtime.
+ExecReload=/bin/kill -s HUP $MAINPID
+
+# Standard output and error will be sent to the systemd journal
+StandardOutput=journal
+StandardError=journal
+
+# Recommended security settings:
+# Ensures the service gets its own /tmp and /var/tmp directories
+PrivateTmp=true
+# Prevents the service from gaining new privileges
+NoNewPrivileges=true
+# Limits the maximum number of open file descriptors, good for servers
+LimitNOFILE=65536
+
+[Install]
+# This unit should be enabled when the system reaches multi-user runlevel
+WantedBy=multi-user.target

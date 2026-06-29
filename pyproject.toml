@@ -27,7 +27,7 @@ dependencies = [
   "arrow ~= 0.16.0",
   "Flask-WTF ~= 0.14.3",
   "boto3 ~= 1.35.37",
-  "Flask-Migrate ~= 2.5.3",
+  "flask-migrate~=2.5.3",
   "flask_admin ~= 1.5.6",
   "flask-cors ~= 3.0.9",
   "watchtower ~= 0.8.0",
@@ -50,11 +50,9 @@ dependencies = [
   "google-auth-httplib2 ~= 0.0.4",
   "python-gnupg ~= 0.4.6",
   "webauthn ~= 0.4.7",
-
   # Git dependency until pyspf creates a new release
   #"pyspf @ git+https://github.com/sdgathman/pyspf.git@665a6df079485a9824be0829e7d71088453db7f6",
   "pyspf ~= 2.0.14",
-
   "Flask-Limiter == 1.5",
   "memory_profiler ~= 0.57.0",
   "gevent ~= 24.11.1",
@@ -65,6 +63,8 @@ dependencies = [
   "newrelic ~= 8.8.0",
   "flanker ~= 0.9.11",
   "pyre2 ~= 0.3.6",
+  "pyre2-updated ~= 0.3.9",
+
   "tldextract ~= 3.1.2",
   "flask-debugtoolbar-sqlalchemy ~= 0.2.0",
   "twilio ~= 7.3.2",
@@ -77,11 +77,12 @@ dependencies = [
   "aiospamc == 0.10",
   "itsdangerous ~= 1.1.0",
   "werkzeug ~= 1.0.1",
-  "alembic ~= 1.4.3",
+  "alembic~=1.4.3",
   "limits ~= 4.0.1",
   "strictyaml ~= 1.7.3",
-
   "sl-pgp",
+  "setuptools<82",
+  "cachetools>=7.0.5",
 ]
 
 [tool.black]
