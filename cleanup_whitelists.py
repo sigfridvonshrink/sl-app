@@ -7,8 +7,11 @@ from app.db import Session
 from app.models import Alias, Contact
 
 # Setup basic logging for the script
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 log = logging.getLogger("cleanup_whitelists")
+
 
 def main():
     log.info("Starting whitelist cleanup script...")
@@ -53,12 +56,18 @@ def main():
                         if email
                         else (mail_from if mail_from and mail_from != "<>" else "")
                     )
-                    new_domain = email_to_extract.split("@")[-1] if "@" in email_to_extract else ""
+                    new_domain = (
+                        email_to_extract.split("@")[-1]
+                        if "@" in email_to_extract
+                        else ""
+                    )
 
                     # We ONLY care about contacts whose *old* domain is in the current whitelist,
                     # OR contacts whose *new* domain happens to already be in the current whitelist (in case they were manually added).
                     # If the contact was allowed, we carry over their *new* domain into the final whitelist.
-                    if (old_domain and old_domain in current_whitelist) or (new_domain and new_domain in current_whitelist):
+                    if (old_domain and old_domain in current_whitelist) or (
+                        new_domain and new_domain in current_whitelist
+                    ):
                         if new_domain:
                             new_whitelist_set.add(new_domain)
 
@@ -66,7 +75,9 @@ def main():
 
                 # Check for differences regardless of order
                 if set(new_whitelist) != set(current_whitelist):
-                    log.info(f"Alias {alias.id} ({alias.email}): Updating whitelist from {current_whitelist} to {new_whitelist}")
+                    log.info(
+                        f"Alias {alias.id} ({alias.email}): Updating whitelist from {current_whitelist} to {new_whitelist}"
+                    )
                     alias.set_sender_allow_domains(new_whitelist)
                     Session.add(alias)
                     updated_count += 1
@@ -78,13 +89,16 @@ def main():
 
             # Final commit
             Session.commit()
-            log.info(f"Whitelist cleanup completed successfully. Updated {updated_count} aliases.")
+            log.info(
+                f"Whitelist cleanup completed successfully. Updated {updated_count} aliases."
+            )
 
         except Exception as e:
             Session.rollback()
             log.error(f"Error during cleanup: {str(e)}")
             log.error(traceback.format_exc())
             sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

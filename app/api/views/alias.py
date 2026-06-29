@@ -517,7 +517,9 @@ def toggle_contact_allow_list(contact_id):
     is_whitelist_empty = (
         alias.sender_allow_list is None or len(alias.sender_allow_list) == 0
     )
-    whitelisted_domains = sorted(alias.sender_allow_list) if alias.sender_allow_list else []
+    whitelisted_domains = (
+        sorted(alias.sender_allow_list) if alias.sender_allow_list else []
+    )
 
     return jsonify(
         in_list=in_list,
