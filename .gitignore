@@ -15,3 +15,5 @@ venv/
 htmlcov
 adhoc
 .env.*
+sl/
+simplelogin.env

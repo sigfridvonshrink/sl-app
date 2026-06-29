@@ -3,6 +3,7 @@ Run scheduled jobs.
 A job runs once its run_at has passed, on the runner's next poll (never before run_at).
 """
 
+import logging
 from typing import List, Optional
 
 import arrow
@@ -438,6 +439,7 @@ def execute():
 if __name__ == "__main__":
     start_metrics_server_from_config("job_runner")
     send_version_event("job_runner")
+    LOG.setLevel(logging.WARNING)
     while True:
         try:
             execute()

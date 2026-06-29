@@ -2512,14 +2512,14 @@ class MailHandler:
                 return return_status
 
 
-def main(port: int):
+def main(port: int, host: str = "0.0.0.0"):
     """Use aiosmtpd Controller"""
     # Increase max line length to allow for non-compliant senders
     # See https://aiosmtpd.aio-libs.org/en/stable/smtp.html#aiosmtpd.smtp.SMTP.line_length_limit
     SMTP.line_length_limit = 2**16
     controller = Controller(
         MailHandler(),
-        hostname="0.0.0.0",
+        hostname=host,
         port=port,
         data_size_limit=config.SMTP_SIZE_LIMIT,
     )
@@ -2541,8 +2541,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "-p", "--port", help="SMTP port to listen for", type=int, default=20381
     )
+    parser.add_argument("--host", help="Address to listen on", default="0.0.0.0")
     args = parser.parse_args()
 
     start_metrics_server_from_config("email_handler")
     LOG.i("Listen for port %s", args.port)
-    main(port=args.port)
+    main(port=args.port, host=args.host)
