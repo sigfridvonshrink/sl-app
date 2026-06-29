@@ -485,7 +485,12 @@ def toggle_contact(contact_id):
         return jsonify(error="Forbidden"), 403
     contact_toggle_block(contact)
 
-    return jsonify(block_forward=contact.block_forward, ui_tag=contact.ui_tag), 200
+    # Fork-custom: expose the whitelist ui_tag only when the caller opts in,
+    # so the upstream default response shape (and its test) stays unchanged.
+    resp = {"block_forward": contact.block_forward}
+    if request.args.get("ui_tag"):
+        resp["ui_tag"] = contact.ui_tag
+    return jsonify(**resp), 200
 
 
 @api_bp.route("/contacts/<int:contact_id>/toggle_allow_list", methods=["POST"])

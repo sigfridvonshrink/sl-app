@@ -280,7 +280,7 @@
     async function blockContact(contactID, contactEmail) {
       let oldValue;
       try {
-        let res = await fetch(`/api/contacts/${contactID}/toggle`, {
+        let res = await fetch(`/api/contacts/${contactID}/toggle?ui_tag=1`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

@@ -725,7 +725,7 @@ def test_toggle_contact(flask_client):
     r = flask_client.post(f"/api/contacts/{contact.id}/toggle")
 
     assert r.status_code == 200
-    assert r.json == {"block_forward": True, "ui_tag": ""}
+    assert r.json == {"block_forward": True}
 
 
 def test_get_aliases_disabled_account(flask_client):
