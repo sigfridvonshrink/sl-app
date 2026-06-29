@@ -30,7 +30,13 @@ def handle_batch_import(batch_import: BatchImport):
     file_url = s3.get_url(batch_import.file.path)
 
     LOG.d("Download file %s from %s", batch_import.file, file_url)
-    r = requests.get(file_url)
+    r = requests.get(
+        file_url,
+        cert=(
+            "/home/simplelogin/batch-import-cert.pem",
+            "/home/simplelogin/batch-import-key.pem",
+        ),
+    )
     # Replace invisible character
     lines = [
         line.decode("utf-8").replace("\ufeff", "").strip() for line in r.iter_lines()
