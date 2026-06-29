@@ -316,7 +316,7 @@ pyotp==2.4.1
     # via simplelogin
 pyparsing==3.2.1
     # via httplib2
-pyre2==0.3.6
+pyre2-updated==0.3.9
     # via simplelogin
 pyspf==2.0.14
     # via simplelogin
