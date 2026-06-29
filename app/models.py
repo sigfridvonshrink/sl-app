@@ -2179,16 +2179,10 @@ class Contact(Base, ModelMixin):
             return ""
         if self.domain_in_allow_list:
             return "✅"
-        now = arrow.utcnow()
-        diff = (now - self.created_at).total_seconds() / 3600
-        emails_count = EmailLog.filter_by(contact_id=self.id).count()
+        from app.whitelist_utils import get_whitelist_tag
 
-        if diff < 24 or emails_count <= 2:
-            return "⚠️⚠️"
-        elif diff < 192 or emails_count <= 5:
-            return "⚠️"
-        else:
-            return "〰️"
+        emails_count = EmailLog.filter_by(contact_id=self.id).count()
+        return get_whitelist_tag(self, emails_count)
 
     @classmethod
     def create(cls, **kw):

@@ -1,13 +1,3 @@
-"""Fork-custom: soft allow-list ("whitelist") tag manipulation.
-
-This module is NOT part of upstream simple-login/app. It holds the logic for
-inserting whitelist-mismatch markers into forwarded emails' Subject / From
-headers, extracted out of ``email_handler.py`` so the custom behaviour lives in
-a single file and stays clear of upstream merge conflicts.
-
-See PR: "Refactor whitelist tag manipulation to utility module".
-"""
-
 import arrow
 from email.header import Header
 from email.message import Message

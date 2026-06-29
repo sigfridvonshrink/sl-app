@@ -668,7 +668,9 @@ def handle_forward(envelope, msg: Message, rcpt_to: str) -> List[Tuple[bool, str
         return [(True, status.E502)]
 
     whitelist_mismatch = False
-    email_to_check = contact.website_email if contact.website_email else envelope.mail_from
+    email_to_check = (
+        contact.website_email if contact.website_email else envelope.mail_from
+    )
     if not alias.is_sender_allowed(email_to_check):
         whitelist_mismatch = True
         LOG.d("Sender %s is not in allow list for alias %s", email_to_check, alias)
@@ -978,7 +980,9 @@ def forward_email_to_mailbox(
 
     if whitelist_mismatch and not user.marker_in_subject:
         # tag was calculated above when whitelist_mismatch is True
-        new_from_header = apply_whitelist_tag_to_from(new_from_header, tag, contact, alias)
+        new_from_header = apply_whitelist_tag_to_from(
+            new_from_header, tag, contact, alias
+        )
 
     add_or_replace_header(msg, "From", new_from_header)
     LOG.d("From header, new:%s, old:%s", new_from_header, old_from_header)
