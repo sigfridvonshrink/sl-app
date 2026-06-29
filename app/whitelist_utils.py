@@ -1,3 +1,13 @@
+"""Fork-custom: soft allow-list ("whitelist") tag manipulation.
+
+This module is NOT part of upstream simple-login/app. It holds the logic for
+inserting whitelist-mismatch markers into forwarded emails' Subject / From
+headers, extracted out of ``email_handler.py`` so the custom behaviour lives in
+a single file and stays clear of upstream merge conflicts.
+
+See PR: "Refactor whitelist tag manipulation to utility module".
+"""
+
 import arrow
 from email.header import Header
 from email.message import Message
@@ -5,7 +15,12 @@ from email.utils import formataddr
 
 from app.log import LOG
 from app.models import Contact, Alias
-from app.email_utils import add_or_replace_header, get_header_unicode, parse_full_address
+from app.email_utils import (
+    add_or_replace_header,
+    get_header_unicode,
+    parse_full_address,
+)
+
 
 def get_whitelist_tag(contact: Contact, email_log_count: int) -> str:
     now = arrow.utcnow()
@@ -17,6 +32,7 @@ def get_whitelist_tag(contact: Contact, email_log_count: int) -> str:
         return "⚠️"
     else:
         return "〰️"
+
 
 def insert_tag_subject(text: str, tag: str) -> str:
     text = text or ""
@@ -40,6 +56,7 @@ def insert_tag_subject(text: str, tag: str) -> str:
 
     return text[:target_idx] + f" {tag} " + text[target_idx + 1 :]
 
+
 def insert_tag_from(text: str, tag: str) -> str:
     text = text or ""
     if not text:
@@ -57,7 +74,10 @@ def insert_tag_from(text: str, tag: str) -> str:
     else:
         return text + tag
 
-def apply_whitelist_tag_to_subject(msg: Message, tag: str, contact: Contact, alias: Alias) -> None:
+
+def apply_whitelist_tag_to_subject(
+    msg: Message, tag: str, contact: Contact, alias: Alias
+) -> None:
     current_subject = msg["Subject"]
     current_subject = get_header_unicode(current_subject) or ""
     new_subject = insert_tag_subject(current_subject, tag)
@@ -71,7 +91,10 @@ def apply_whitelist_tag_to_subject(msg: Message, tag: str, contact: Contact, ali
         alias,
     )
 
-def apply_whitelist_tag_to_from(new_from_header: str, tag: str, contact: Contact, alias: Alias) -> str:
+
+def apply_whitelist_tag_to_from(
+    new_from_header: str, tag: str, contact: Contact, alias: Alias
+) -> str:
     try:
         display_name, email_address = parse_full_address(new_from_header)
     except ValueError:
