@@ -3,12 +3,12 @@ Run scheduled jobs.
 Not meant for running job at precise time (+- 1h)
 """
 
+import logging
+import time
 from typing import List, Optional
 
 import arrow
 import newrelic.agent
-import time
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Query
 from sqlalchemy.orm.exc import ObjectDeletedError
 from sqlalchemy.sql.expression import or_, and_
@@ -414,9 +414,6 @@ def execute():
 
 if __name__ == "__main__":
     send_version_event("job_runner")
+    LOG.setLevel(logging.WARNING)
     while True:
-        try:
-            execute()
-        except IntegrityError:
-            Session.rollback()
-            Session.close()
+        execute()
