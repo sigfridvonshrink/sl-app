@@ -82,8 +82,22 @@ This is a fork of `simple-login/app` (`upstream` remote). Goal: add custom capab
 - **Prefer additive/opt-in over changing upstream contracts.** If a custom field would break an upstream test, gate it (e.g. behind a query param) so the default response stays byte-identical. Do **not** "fix" the breakage by editing the upstream test's expectation.
 - Run the full suite before merging (see the test commands above).
 
-Current fork-owned pieces (soft allow-list / "whitelist" feature):
-- `app/whitelist_utils.py` — whitelist-mismatch tag generation + Subject/From insertion, extracted from `email_handler.py`. `Contact.ui_tag` in `models.py` delegates here.
-- `app/api/views/alias.py` `toggle_contact` — returns the custom `ui_tag` only when called with `?ui_tag=1` (the dashboard opts in); default response is the upstream shape.
-- `cleanup_whitelists.py` — fork maintenance script.
-- Fork tests: `tests/test_whitelist_utils.py` (unit), `tests/api/test_contact_ui_tag.py` (opt-in endpoint). Upstream `tests/api/test_alias.py` is left unchanged.
+Fork-owned files (new; zero upstream conflict):
+- `app/sender_warning_utils.py` — single source of truth for the unexpected-sender warning feature: decay config + validation, marker computation, Subject/From insertion, and per-alias panel state. `Contact.ui_tag` in `models.py` delegates here.
+- `app/certificate_auth.py` — client-cert subject → user lookup.
+- `policy_service.py` — Postfix sender-access socket daemon (verp/bounce + blocked-alias passthrough). No test coverage; smoke-test mail flow after upstream merges.
+- `cleanup_allow_lists.py` — fork maintenance script.
+- systemd units in `systemd/`.
+- Fork tests: `tests/test_sender_warning_utils.py`, `tests/api/test_contact_ui_tag.py`, `tests/auth/test_certificate_auth.py`.
+
+Shared upstream files modified — watch these on rebase:
+- `app/api/views/alias.py` — `toggle_contact` returns `ui_tag` only with `?ui_tag=1` (default response = upstream shape); `toggle_allow_domain` (per-alias) is a new endpoint returning the panel state. Additive.
+- `email_handler.py` — unexpected-sender check in the forward path; gated by the `FLAG_SENDER_WARNINGS` master flag and inert when an alias has no `sender_allow_list` (`is_sender_allowed()` returns True on empty list).
+- `app/models.py` — additive `Alias.sender_allow_list`, `User.sender_warning_decay` + flag/accessors, `Contact` properties; migration `52a76e45b187` (adds both columns).
+- `app/auth/base.py` — `cert_auto_login` `before_request`; early-returns without the `X-SSL-Client-Subject` header. Calls `after_login(..., login_from_proton=True)` to bypass 2FA by design (see memory).
+
+Shared changes that alter EXISTING behavior (not feature-gated — re-verify on merge):
+- `app/import_utils.py` — batch import now sends a client cert (`cert=(…batch-import-cert.pem…)`); depends on those PEM files existing.
+- `server.py` / `app/log.py` / `job_runner.py` — debug flags + log levels changed (operational). `job_runner.py` otherwise matches upstream: upstream's `try/except IntegrityError` (commit `2aac58f7 "Rollback session"`) was once dropped by an upstream merge and has been restored; only `LOG.setLevel(logging.WARNING)` is a deliberate fork delta.
+
+Upstream test files: `tests/api/test_alias.py` carries appended fork tests but no existing upstream test was modified.
