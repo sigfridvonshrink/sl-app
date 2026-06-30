@@ -24,6 +24,11 @@ from app.errors import (
 )
 from app.log import LOG
 from app.models import Alias, Contact, EmailLog
+from app.sender_warning_utils import (
+    build_contact_markers,
+    get_decay_config,
+    TRUSTED_MARKER,
+)
 from app.utils import CSRFValidationForm
 
 
@@ -302,6 +307,17 @@ def alias_contact_manager(alias_id):
             + contact_infos
         )
 
+    # Per-contact warning markers for the contacts on THIS page only, so enabling
+    # the feature does not turn the contact page into an all-contacts aggregation.
+    # The full trusted/marked domain panel is loaded on demand when opened (see the
+    # allow_list_state API endpoint).
+    sender_warnings_enabled = current_user.sender_warnings_enabled
+    contact_markers = {}
+    if sender_warnings_enabled:
+        contact_markers = build_contact_markers(
+            alias, [ci.contact for ci in contact_infos]
+        )
+
     return render_template(
         "dashboard/alias_contact_manager.html",
         contact_infos=contact_infos,
@@ -314,4 +330,8 @@ def alias_contact_manager(alias_id):
         nb_contact=nb_contact,
         can_create_contacts=current_user.can_create_contacts(),
         csrf_form=csrf_form,
+        sender_warnings_enabled=sender_warnings_enabled,
+        contact_markers=contact_markers,
+        trusted_marker=TRUSTED_MARKER,
+        decay=get_decay_config(current_user),
     )
