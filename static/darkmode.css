@@ -95,3 +95,17 @@ em {
     border-radius: 2px;
     padding: 0 8px;
 }
+
+/* Dark mode for the unexpected-sender warning UI (the domain panel uses
+   .alert-secondary; marked domain chips use .badge-light). Bootstrap leaves both
+   light by default. Scoped to the dark theme so light mode is unchanged. */
+[data-theme="dark"] .alert-secondary {
+    color: var(--font-color);
+    background-color: var(--heading-background);
+    border-color: rgba(228, 236, 238, 0.2);
+}
+
+[data-theme="dark"] .badge-light {
+    color: var(--font-color);
+    background-color: var(--light-bg-color);
+}

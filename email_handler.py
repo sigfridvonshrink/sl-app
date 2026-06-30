@@ -35,6 +35,7 @@ import argparse
 import email
 import time
 import uuid
+import logging
 from email import encoders
 from email.encoders import encode_noop
 from email.message import Message
@@ -103,6 +104,13 @@ from app.email_utils import (
     sl_formataddr,
 )
 from app.email_validation import is_valid_email, normalize_reply_email
+from app.sender_warning_utils import (
+    get_warning_marker,
+    should_auto_trust,
+    apply_marker_to_subject,
+    apply_marker_to_from,
+    strip_marker_from_subject,
+)
 from app.errors import (
     NonReverseAliasInReplyPhase,
     VERPTransactional,
@@ -163,7 +171,7 @@ from server import create_light_app
 @sentry_sdk.trace
 def get_or_create_contact(
     from_header: str, mail_from: str, alias: Alias
-) -> Optional[Contact]:
+) -> Tuple[Optional[Contact], bool]:
     """
     contact_from_header is the RFC 2047 format FROM header
     """
@@ -196,7 +204,7 @@ def get_or_create_contact(
     )
     if contact_result.error:
         LOG.w(f"Error creating contact: {contact_result.error.value}")
-    return contact_result.contact
+    return contact_result.contact, contact_result.created
 
 
 @sentry_sdk.trace
@@ -590,7 +598,9 @@ def handle_forward(envelope, msg: Message, rcpt_to: str) -> List[Tuple[bool, str
 
     from_header = get_header_unicode(msg[headers.FROM])
     LOG.d("Create or get contact for from_header:%s", from_header)
-    contact = get_or_create_contact(from_header, envelope.mail_from, alias)
+    contact, contact_created = get_or_create_contact(
+        from_header, envelope.mail_from, alias
+    )
     if not contact:
         return [(False, status.E504)]
     alias = (
@@ -634,6 +644,16 @@ def handle_forward(envelope, msg: Message, rcpt_to: str) -> List[Tuple[bool, str
             commit=True,
         )
         return [(True, status.E502)]
+
+    # unexpected-sender warning. Inert unless the user enabled the master
+    # switch and the alias has a non-empty allow-list (is_sender_allowed() returns True
+    # on an empty list, so the upstream forward path is unchanged when disabled).
+    sender_not_trusted = False
+    if alias.user.sender_warnings_enabled:
+        email_to_check = contact.sender_domain_source or envelope.mail_from
+        if not alias.is_sender_allowed(email_to_check):
+            sender_not_trusted = True
+            LOG.d("Sender %s is not in allow list for alias %s", email_to_check, alias)
 
     if not alias.enabled or alias.is_trashed() or contact.block_forward:
         if not alias.enabled:
@@ -720,7 +740,15 @@ def handle_forward(envelope, msg: Message, rcpt_to: str) -> List[Tuple[bool, str
             # create a copy of message for each forward
             ret.append(
                 forward_email_to_mailbox(
-                    alias, copy(msg), contact, envelope, mailbox, user, reply_to_contact
+                    alias,
+                    copy(msg),
+                    contact,
+                    envelope,
+                    mailbox,
+                    user,
+                    reply_to_contact,
+                    sender_not_trusted,
+                    contact_created,
                 )
             )
 
@@ -736,6 +764,8 @@ def forward_email_to_mailbox(
     mailbox,
     user,
     reply_to_contacts: list[Contact],
+    sender_not_trusted: bool = False,
+    contact_created: bool = False,
 ) -> Tuple[bool, str]:
     LOG.debug(f"Forward {contact} -> {alias} -> {mailbox} ({mailbox.user})")
 
@@ -881,6 +911,22 @@ def forward_email_to_mailbox(
             f"""Forwarded by SimpleLogin to {alias.email} from "{sender}" with <b>{orig_subject}</b> as subject""",
         )
 
+    marker_tag = None
+    if sender_not_trusted:
+        emails_count = EmailLog.filter_by(contact_id=contact.id).count()
+        if should_auto_trust(contact, emails_count, user):
+            # decay terminus: a long-known sender is promoted into the trusted set
+            # (recorded, reversible) instead of carrying a marker forever.
+            domains = alias.get_sender_allow_domains()
+            domains.add(contact.registered_domain)
+            alias.set_sender_allow_domains(domains)
+            Session.commit()
+            LOG.d("Auto-trusted %s for alias %s", contact.registered_domain, alias)
+        else:
+            marker_tag = get_warning_marker(contact, emails_count, user)
+            if user.marker_in_subject:
+                apply_marker_to_subject(msg, marker_tag, contact, alias)
+
     # create PGP email if needed
     if mailbox.pgp_enabled() and user.is_premium() and not alias.disable_pgp:
         LOG.d("Encrypt message using mailbox %s", mailbox)
@@ -922,6 +968,12 @@ def forward_email_to_mailbox(
     # replace the email part in from: header
     old_from_header = msg[headers.FROM]
     new_from_header = contact.new_addr()
+
+    if marker_tag is not None and not user.marker_in_subject:
+        new_from_header = apply_marker_to_from(
+            new_from_header, marker_tag, contact, alias
+        )
+
     add_or_replace_header(msg, "From", new_from_header)
     LOG.d("From header, new:%s, old:%s", new_from_header, old_from_header)
 
@@ -1204,6 +1256,17 @@ def handle_reply(
     # Remove PGP public key attachments that could leak the user's real email address
     if config.DROP_PGP_KEY_ATTACHMENTS_ON_REPLY:
         msg = remove_sender_pgp_key_attachment(msg)
+
+    # strip a previously-inserted unexpected-sender marker so it does not
+    # echo back out on reply. Matches the user's currently-configured marker glyphs.
+    # Gated by the feature flag so replies are untouched for users who have it off.
+    if user.sender_warnings_enabled:
+        orig_subject = msg[headers.SUBJECT]
+        if orig_subject:
+            orig_subject_str = get_header_unicode(orig_subject) or ""
+            new_subject_str = strip_marker_from_subject(orig_subject_str, user)
+            if new_subject_str != orig_subject_str:
+                add_or_replace_header(msg, "Subject", new_subject_str)
 
     orig_to = msg[headers.TO]
     orig_cc = msg[headers.CC]
@@ -2494,4 +2557,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     LOG.i("Listen for port %s", args.port)
+    LOG.setLevel(logging.WARNING)
     main(port=args.port)
