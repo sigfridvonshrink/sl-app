@@ -823,3 +823,12 @@ PROMETHEUS_METRICS_TOKEN = os.environ.get("PROMETHEUS_METRICS_TOKEN") or None
 
 # Prefix prepended to every metric name created by the Prometheus backend
 PROMETHEUS_METRIC_PREFIX = os.environ.get("PROMETHEUS_METRIC_PREFIX", "simplelogin")
+
+# Unexpected-sender warning feature: bounds for the per-user decay config.
+SENDER_WARNING_MARKER_MAX_LEN = int(os.environ.get("SENDER_WARNING_MARKER_MAX_LEN", 8))
+SENDER_WARNING_MAX_DECAY_DAYS = int(
+    os.environ.get("SENDER_WARNING_MAX_DECAY_DAYS", 3650)
+)
+SENDER_WARNING_MAX_DECAY_COUNT = int(
+    os.environ.get("SENDER_WARNING_MAX_DECAY_COUNT", 100000)
+)

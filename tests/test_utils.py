@@ -99,3 +99,28 @@ def test_canonicalize_email(dirty: str, clean: str):
 )
 def test_redact_query_args(query: str, expected: dict):
     assert redact_query_args(MultiDict(parse_qsl(query))) == expected
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("foo@example.com", "example.com"),
+        ("example.com", "example.com"),
+        ("mail.example.com", "example.com"),
+        ("a.b.co.uk", "b.co.uk"),
+        ("USER@Example.COM", "example.com"),
+        ("localhost", "localhost"),
+    ],
+)
+def test_get_registered_domain(value: str, expected: str):
+    from app.utils import get_registered_domain
+
+    assert get_registered_domain(value) == expected
+
+
+def test_registered_domain_extractor_is_offline():
+    # the shared extractor must never fetch the Public Suffix List over the
+    # network (it runs in the email path); it uses the bundled snapshot.
+    from app.utils import _tld_extract
+
+    assert not _tld_extract.suffix_list_urls
