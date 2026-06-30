@@ -1,4 +1,3 @@
-import logging
 import os
 from flask import Flask
 
@@ -51,8 +50,6 @@ def local_main():
         # app.config["DEBUG_TB_PANELS"] += ("flask_debugtoolbar_sqlalchemy.SQLAlchemyPanel",)
 
     app.run(debug=False, port=7777)
-
-    LOG.setLevel(logging.INFO)
 
     # uncomment to run https locally
     # LOG.d("enable https")
