@@ -243,3 +243,135 @@ def test_create_contact_with_reply_email():
     assert out.contact is None
     assert out.created is False
     assert out.error == ContactCreateError.InvalidEmail
+
+
+def test_auto_trust_first_contact_when_feature_enabled():
+    # feature on + auto-trust-first-contact on -> first contact's domain is
+    # added to the alias sender allow list
+    user = create_new_user()
+    user.flags = (
+        user.flags | User.FLAG_SENDER_WARNINGS | User.FLAG_AUTO_TRUST_FIRST_CONTACT
+    )
+    alias = Alias.create_new_random(user)
+    Session.commit()
+
+    result = create_contact(random_email(), alias)
+    assert result.error is None
+    Session.refresh(alias)
+    assert alias.sender_allow_list
+
+
+def test_no_auto_trust_when_feature_disabled():
+    # auto-trust-first-contact set but the master switch is off -> allow list
+    # stays empty, and the first-contact lookup is never run
+    user = create_new_user()
+    user.flags = user.flags | User.FLAG_AUTO_TRUST_FIRST_CONTACT
+    alias = Alias.create_new_random(user)
+    Session.commit()
+
+    result = create_contact(random_email(), alias)
+    assert result.error is None
+    Session.refresh(alias)
+    assert not alias.sender_allow_list
+
+
+def test_sender_domain_source_prefers_website_email():
+    # visible From (website_email) wins over envelope sender (mail_from)
+    user = create_new_user()
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    contact = create_contact(
+        "alice@visible.com", alias, mail_from="bounce@infra.example.com"
+    ).contact
+    assert contact.sender_domain_source == "alice@visible.com"
+    assert contact.registered_domain == "visible.com"
+
+
+def test_sender_domain_source_falls_back_to_mail_from():
+    # no website_email -> narrow fallback to the envelope sender
+    user = create_new_user()
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    contact = create_contact(
+        "", alias, mail_from="bounce@infra.example.com", allow_empty_email=True
+    ).contact
+    assert contact.sender_domain_source == "bounce@infra.example.com"
+    assert contact.registered_domain == "example.com"
+
+
+def test_ui_trust_matches_forward_decision_on_website_email():
+    # trusting the visible domain makes both the UI marker and the forward-path
+    # check agree; trusting the infra (mail_from) domain does not.
+    user = create_new_user()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    contact = create_contact(
+        "alice@visible.com", alias, mail_from="bounce@infra.example.com"
+    ).contact
+
+    alias.set_sender_allow_domains({"visible.com"})
+    Session.commit()
+    assert contact.domain_in_allow_list is True
+    assert alias.is_sender_allowed(contact.sender_domain_source) is True
+
+    alias.set_sender_allow_domains({"example.com"})
+    Session.commit()
+    assert contact.domain_in_allow_list is False
+
+
+def test_build_contact_markers_is_bounded_to_given_contacts():
+    from app.sender_warning_utils import build_contact_markers
+
+    user = create_new_user()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    c1 = create_contact("a@x-domain.com", alias).contact
+    create_contact("b@y-domain.com", alias).contact  # second contact, not requested
+    alias.set_sender_allow_domains({"trusted.com"})  # non-empty -> contacts get a state
+    Session.commit()
+
+    markers = build_contact_markers(alias, [c1])
+    assert set(markers.keys()) == {str(c1.id)}  # only the given contact
+    assert build_contact_markers(alias, []) == {}
+
+
+def test_warning_state_for_contact_trusted_marked_blocked():
+    from app.sender_warning_utils import warning_state_for_contact, TRUSTED_STATE
+
+    user = create_new_user()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    contact = create_contact("a@sender.com", alias).contact
+
+    # empty allow-list -> nothing shown
+    assert warning_state_for_contact(contact, 0) is None
+
+    # trust the sender's domain -> trusted state
+    alias.set_sender_allow_domains({"sender.com"})
+    Session.commit()
+    assert warning_state_for_contact(contact, 0) == TRUSTED_STATE
+
+    # trust a different domain -> contact is marked (warning tier index >= 0)
+    alias.set_sender_allow_domains({"other.com"})
+    Session.commit()
+    assert warning_state_for_contact(contact, 0) >= 0
+
+    # blocked contact -> nothing shown
+    contact.block_forward = True
+    Session.commit()
+    assert warning_state_for_contact(contact, 0) is None
+
+
+def test_warning_state_for_contact_none_when_feature_off():
+    from app.sender_warning_utils import warning_state_for_contact
+
+    user = create_new_user()  # feature off by default
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    contact = create_contact("a@sender.com", alias).contact
+    alias.set_sender_allow_domains({"other.com"})
+    Session.commit()
+    assert warning_state_for_contact(contact, 0) is None
