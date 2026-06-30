@@ -19,7 +19,10 @@ from app.api.serializer import (
     get_alias_info_v2,
     get_alias_infos_with_pagination_v3,
 )
-from app.contact_utils import contact_toggle_block
+from app.contact_utils import (
+    contact_toggle_block,
+    perform_contact_deletion,
+)
 from app.dashboard.views.alias_contact_manager import create_contact
 from app.dashboard.views.alias_log import get_alias_log
 from app.db import Session
@@ -32,6 +35,8 @@ from app.errors import (
 from app.extensions import limiter
 from app.log import LOG
 from app.models import Alias, Contact, Mailbox, AliasDeleteReason
+from app.sender_warning_utils import build_allow_list_state
+from app.utils import get_registered_domain
 
 
 @deprecated
@@ -460,13 +465,7 @@ def delete_contact(contact_id):
     if not contact or contact.alias.user_id != user.id:
         return jsonify(error="Forbidden"), 403
 
-    emit_alias_audit_log(
-        alias=contact.alias,
-        action=AliasAuditLogAction.DeleteContact,
-        message=f"Deleted contact {contact_id} ({contact.email})",
-    )
-    Contact.delete(contact_id)
-    Session.commit()
+    perform_contact_deletion(contact)
 
     return jsonify(deleted=True), 200
 
@@ -488,4 +487,45 @@ def toggle_contact(contact_id):
         return jsonify(error="Forbidden"), 403
     contact_toggle_block(contact)
 
-    return jsonify(block_forward=contact.block_forward), 200
+    # expose the ui_tag only when the caller opts in,
+    # so the upstream default response shape (and its test) stays unchanged.
+    resp = {"block_forward": contact.block_forward}
+    if request.args.get("ui_tag"):
+        resp["ui_tag"] = contact.ui_tag
+    return jsonify(**resp), 200
+
+
+@api_bp.route("/aliases/<int:alias_id>/toggle_allow_domain", methods=["POST"])
+@require_api_auth
+@limiter.limit("100/hour")
+def toggle_alias_allow_domain(alias_id):
+    """toggle a sender domain in the alias's allow-list.
+
+    Body: {"domain": "<domain or email>"}. The domain is normalized to its registered
+    form. Returns the full allow-list panel state (trusted/flagged groups, per-contact
+    tags, counts) so the client repaints from the server rather than deriving anything.
+    """
+    user = g.user
+    alias: Optional[Alias] = Alias.get(alias_id)
+
+    if not alias or alias.user_id != user.id:
+        return jsonify(error="Forbidden"), 403
+
+    data = request.get_json(silent=True) or {}
+    raw_domain = (data.get("domain") or "").strip()
+    domain = get_registered_domain(raw_domain) if raw_domain else ""
+    if not domain:
+        return jsonify(error="domain is required"), 400
+
+    domains = alias.get_sender_allow_domains()
+    if domain in domains:
+        domains.remove(domain)
+        in_list = False
+    else:
+        domains.add(domain)
+        in_list = True
+
+    alias.set_sender_allow_domains(domains)
+    Session.commit()
+
+    return jsonify(domain=domain, in_list=in_list, **build_allow_list_state(alias)), 200

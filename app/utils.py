@@ -25,6 +25,19 @@ def word_exist(word):
     return word in _words
 
 
+def get_registered_domain(email_or_domain: str) -> str:
+    """Extract the registered domain from an email address or domain string."""
+    import tldextract
+
+    domain = (
+        email_or_domain.split("@")[-1] if "@" in email_or_domain else email_or_domain
+    )
+    ext = tldextract.extract(domain)
+    return (
+        ext.registered_domain.lower() if ext.registered_domain else ext.domain.lower()
+    )
+
+
 def random_words(words: int = 2, numbers: int = 0):
     """Generate a random words. Used to generate user-facing string, for ex email addresses"""
     # nb_words = random.randint(2, 3)
