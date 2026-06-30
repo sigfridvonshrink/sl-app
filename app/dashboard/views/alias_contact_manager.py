@@ -24,6 +24,7 @@ from app.errors import (
 )
 from app.log import LOG
 from app.models import Alias, Contact, EmailLog
+from app.sender_warning_utils import build_allow_list_state, get_decay_config
 from app.utils import CSRFValidationForm
 
 
@@ -302,6 +303,13 @@ def alias_contact_manager(alias_id):
             + contact_infos
         )
 
+    # unexpected-sender warning panel state, computed server-side so the
+    # template/JS never derive decay tiers. Only built when the feature is enabled.
+    sender_warnings_enabled = current_user.sender_warnings_enabled
+    allow_list_state = None
+    if sender_warnings_enabled:
+        allow_list_state = build_allow_list_state(alias)
+
     return render_template(
         "dashboard/alias_contact_manager.html",
         contact_infos=contact_infos,
@@ -314,4 +322,7 @@ def alias_contact_manager(alias_id):
         nb_contact=nb_contact,
         can_create_contacts=current_user.can_create_contacts(),
         csrf_form=csrf_form,
+        sender_warnings_enabled=sender_warnings_enabled,
+        allow_list_state=allow_list_state,
+        decay=get_decay_config(current_user),
     )

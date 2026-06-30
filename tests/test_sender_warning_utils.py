@@ -1,0 +1,268 @@
+from email.message import Message
+from types import SimpleNamespace
+
+import arrow
+
+import pytest
+
+from app.sender_warning_utils import (
+    get_warning_marker,
+    should_auto_trust,
+    insert_marker_in_subject,
+    insert_marker_in_from,
+    apply_marker_to_subject,
+    apply_marker_to_from,
+    sanitize_marker,
+    validate_decay_config,
+    get_configured_markers,
+    strip_marker_from_subject,
+    DecayConfigError,
+    DEFAULT_DECAY,
+)
+
+
+def _contact(hours_ago: float):
+    return SimpleNamespace(
+        created_at=arrow.utcnow().shift(hours=-hours_ago),
+        website_email="sender@example.com",
+    )
+
+
+# get_warning_marker: tag escalates with contact age and email count
+
+
+def test_get_warning_marker_double_warning_for_new_contact():
+    assert get_warning_marker(_contact(hours_ago=1), email_log_count=10) == "⚠️⚠️"
+
+
+def test_get_warning_marker_double_warning_for_low_count():
+    assert get_warning_marker(_contact(hours_ago=1000), email_log_count=2) == "⚠️⚠️"
+
+
+def test_get_warning_marker_single_warning_by_age():
+    assert get_warning_marker(_contact(hours_ago=100), email_log_count=10) == "⚠️"
+
+
+def test_get_warning_marker_single_warning_by_count():
+    assert get_warning_marker(_contact(hours_ago=1000), email_log_count=5) == "⚠️"
+
+
+def test_get_warning_marker_settled_contact():
+    assert get_warning_marker(_contact(hours_ago=1000), email_log_count=10) == "〰️"
+
+
+# insert_marker_in_subject: insert at the 3rd / 2nd / 1st non-consecutive space
+
+
+def test_insert_marker_in_subject_picks_third_space():
+    # spaces at indexes 1,3,5,7 -> third (index 5)
+    assert insert_marker_in_subject("a b c d e", "T") == "a b c T d e"
+
+
+def test_insert_marker_in_subject_two_spaces_picks_second():
+    assert insert_marker_in_subject("a b c", "T") == "a b T c"
+
+
+def test_insert_marker_in_subject_one_space_picks_first():
+    assert insert_marker_in_subject("a b", "T") == "a T b"
+
+
+def test_insert_marker_in_subject_no_space_appends():
+    assert insert_marker_in_subject("hello", "T") == "helloT"
+
+
+def test_insert_marker_in_subject_collapses_consecutive_spaces():
+    # double space counts as a single non-consecutive index; the second space
+    # is preserved after the replaced one
+    assert insert_marker_in_subject("a  b", "T") == "a T  b"
+
+
+def test_insert_marker_in_subject_empty_or_none_returns_tag():
+    assert insert_marker_in_subject("", "T") == "T"
+    assert insert_marker_in_subject(None, "T") == "T"
+
+
+# insert_marker_in_from: always insert at the first non-consecutive space
+
+
+def test_insert_marker_in_from_uses_first_space():
+    assert insert_marker_in_from("John Doe Smith", "T") == "John T Doe Smith"
+
+
+def test_insert_marker_in_from_no_space_appends():
+    assert insert_marker_in_from("John", "T") == "JohnT"
+
+
+def test_insert_marker_in_from_empty_or_none_returns_tag():
+    assert insert_marker_in_from("", "T") == "T"
+    assert insert_marker_in_from(None, "T") == "T"
+
+
+# apply_* wrappers: encode the result and keep the email address intact
+
+
+def test_apply_marker_to_subject_replaces_header():
+    msg = Message()
+    msg["Subject"] = "a b c d e"
+    apply_marker_to_subject(msg, "T", _contact(1), alias=None)
+    # only one Subject header remains, and it carries the tag once decoded
+    assert len([k for k in msg.keys() if k == "Subject"]) == 1
+    from email.header import decode_header, make_header
+
+    decoded = str(make_header(decode_header(msg["Subject"])))
+    assert decoded == "a b c T d e"
+
+
+def test_apply_marker_to_from_preserves_address():
+    out = apply_marker_to_from(
+        "Jane Roe <jane@example.com>", "T", _contact(1), alias=None
+    )
+    assert "jane@example.com" in out
+
+    from email.utils import parseaddr
+    from email.header import decode_header, make_header
+
+    name, addr = parseaddr(out)
+    assert addr == "jane@example.com"
+    assert str(make_header(decode_header(name))) == "Jane T Roe"
+
+
+def _user(decay):
+    return SimpleNamespace(sender_warning_decay=decay)
+
+
+# sanitize_marker: header-injection safety
+def test_sanitize_marker_rejects_crlf():
+    for bad in ["a\nb", "a\rb", "x\r\ny"]:
+        with pytest.raises(DecayConfigError):
+            sanitize_marker(bad)
+
+
+def test_sanitize_marker_rejects_empty_and_too_long():
+    with pytest.raises(DecayConfigError):
+        sanitize_marker("")
+    with pytest.raises(DecayConfigError):
+        sanitize_marker("123456789")  # > MAX_MARKER_LEN
+
+
+def test_sanitize_marker_accepts_emoji():
+    assert sanitize_marker("⚠️⚠️") == "⚠️⚠️"
+
+
+# validate_decay_config
+def test_validate_decay_config_defaults_roundtrip():
+    cfg = validate_decay_config(dict(DEFAULT_DECAY))
+    assert cfg["tiers"][0]["marker"] == "⚠️⚠️"
+    assert cfg["auto_trust"] is None
+
+
+def test_validate_decay_config_requires_increasing_tiers():
+    with pytest.raises(DecayConfigError):
+        validate_decay_config(
+            {
+                "tiers": [
+                    {"marker": "a", "max_days": 200, "max_count": 5},
+                    {"marker": "b", "max_days": 24, "max_count": 2},
+                ],
+                "floor_marker": "c",
+                "auto_trust": None,
+            }
+        )
+
+
+def test_validate_decay_config_autotrust_must_be_below_last_tier():
+    with pytest.raises(DecayConfigError):
+        validate_decay_config(
+            {
+                "tiers": [
+                    {"marker": "a", "max_days": 24, "max_count": 2},
+                    {"marker": "b", "max_days": 192, "max_count": 5},
+                ],
+                "floor_marker": "c",
+                "auto_trust": {"min_days": 10, "min_count": 1},
+            }
+        )
+
+
+def test_validate_decay_config_rejects_crlf_marker():
+    with pytest.raises(DecayConfigError):
+        validate_decay_config(
+            {
+                "tiers": [
+                    {"marker": "x\r\ny", "max_days": 24, "max_count": 2},
+                    {"marker": "b", "max_days": 192, "max_count": 5},
+                ],
+                "floor_marker": "c",
+                "auto_trust": None,
+            }
+        )
+
+
+# should_auto_trust: AND polarity, off by default
+def test_should_auto_trust_off_by_default():
+    assert should_auto_trust(_contact(hours_ago=10000), 100, _user(None)) is False
+
+
+def test_should_auto_trust_requires_both_axes():
+    cfg = {
+        "tiers": [
+            {"marker": "⚠️⚠️", "max_days": 1, "max_count": 2},
+            {"marker": "⚠️", "max_days": 8, "max_count": 5},
+        ],
+        "floor_marker": "〰️",
+        "auto_trust": {"min_days": 10, "min_count": 6},
+    }
+    user = _user(cfg)
+    # hours_ago/24 = age in days
+    assert (
+        should_auto_trust(_contact(hours_ago=300), 10, user) is True
+    )  # 12.5d, 10 msgs
+    assert (
+        should_auto_trust(_contact(hours_ago=10), 10, user) is False
+    )  # 0.4d, too young
+    assert should_auto_trust(_contact(hours_ago=300), 3, user) is False  # too few msgs
+
+
+# custom glyphs flow through tag + strip
+def test_custom_glyphs_used_for_tag_and_strip():
+    cfg = {
+        "tiers": [
+            {"marker": "NEW", "max_days": 24, "max_count": 2},
+            {"marker": "MID", "max_days": 192, "max_count": 5},
+        ],
+        "floor_marker": "OLD",
+        "auto_trust": None,
+    }
+    user = _user(cfg)
+    assert get_warning_marker(_contact(hours_ago=1), 1, user) == "NEW"
+    assert "NEW" in get_configured_markers(user)
+    stripped = strip_marker_from_subject("Re: hello NEW world", user)
+    assert "NEW" not in stripped
+
+
+def test_validate_decay_config_rejects_out_of_bounds():
+    base_tier = {"marker": "a", "max_days": 1, "max_count": 2}
+    # max_days over the 10-year cap
+    with pytest.raises(DecayConfigError):
+        validate_decay_config(
+            {
+                "tiers": [
+                    base_tier,
+                    {"marker": "b", "max_days": 99999, "max_count": 5},
+                ],
+                "floor_marker": "c",
+                "auto_trust": None,
+            }
+        )
+    # max_count over the cap
+    with pytest.raises(DecayConfigError):
+        validate_decay_config(
+            {
+                "tiers": [
+                    base_tier,
+                    {"marker": "b", "max_days": 8, "max_count": 9_999_999},
+                ],
+                "floor_marker": "c",
+                "auto_trust": None,
+            }
+        )

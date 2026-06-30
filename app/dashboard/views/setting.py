@@ -25,6 +25,11 @@ from app.db import Session
 from app.extensions import limiter
 from app.image_validation import detect_image_format, ImageFormat
 from app.log import LOG
+from app.sender_warning_utils import (
+    get_decay_config,
+    validate_decay_config,
+    DecayConfigError,
+)
 from app.models import (
     BlockBehaviourEnum,
     PlanEnum,
@@ -39,6 +44,7 @@ from app.models import (
     PartnerSubscription,
     UnsubscribeBehaviourEnum,
     UserAliasDeleteAction,
+    User,
 )
 from app.proton.proton_unlink import can_unlink_proton_account
 from app.utils import (
@@ -284,6 +290,71 @@ def setting():
                 return redirect(url_for("dashboard.setting"))
             Session.commit()
             flash("Your preference has been updated", "success")
+        elif request.form.get("form-name") == "sender-warnings":
+            # one form for the unexpected-sender warning feature -- master
+            # switch plus the advanced options (placement, auto-trust-first, and the
+            # tunable decay ladder).
+
+            enable = request.form.get("enable_warnings") == "on"
+            auto_trust = request.form.get("auto_trust_first") == "on"
+            marker_in_subject = request.form.get("marker_in_subject") == "on"
+
+            flags = current_user.flags
+            flags = (
+                flags | User.FLAG_SENDER_WARNINGS
+                if enable
+                else flags & ~User.FLAG_SENDER_WARNINGS
+            )
+            flags = (
+                flags | User.FLAG_AUTO_TRUST_FIRST_CONTACT
+                if auto_trust
+                else flags & ~User.FLAG_AUTO_TRUST_FIRST_CONTACT
+            )
+            flags = (
+                flags | User.FLAG_MARKER_IN_SUBJECT
+                if marker_in_subject
+                else flags & ~User.FLAG_MARKER_IN_SUBJECT
+            )
+            current_user.flags = flags
+
+            if request.form.get("reset_decay"):
+                current_user.sender_warning_decay = None
+                Session.commit()
+                flash("Settings updated; decay reset to defaults", "success")
+                return redirect(url_for("dashboard.setting") + "#sender-warnings")
+
+            def _opt_int(name):
+                raw = (request.form.get(name) or "").strip()
+                return int(raw) if raw != "" else None
+
+            try:
+                tiers = [
+                    {
+                        "marker": request.form.get(f"tier{i}_marker", ""),
+                        "max_days": _opt_int(f"tier{i}_days"),
+                        "max_count": _opt_int(f"tier{i}_count"),
+                    }
+                    for i in range(2)
+                ]
+                auto_days = _opt_int("autotrust_days")
+                auto_count = _opt_int("autotrust_count")
+                auto_trust = None
+                if auto_days is not None or auto_count is not None:
+                    auto_trust = {"min_days": auto_days, "min_count": auto_count}
+
+                current_user.sender_warning_decay = validate_decay_config(
+                    {
+                        "tiers": tiers,
+                        "floor_marker": request.form.get("floor_marker", ""),
+                        "auto_trust": auto_trust,
+                    }
+                )
+                Session.commit()
+                flash("Your preference has been updated", "success")
+            except (ValueError, DecayConfigError) as e:
+                Session.rollback()
+                flash(f"Invalid decay settings: {e}", "error")
+            return redirect(url_for("dashboard.setting") + "#sender-warnings")
 
     manual_sub = ManualSubscription.get_by(user_id=current_user.id)
     apple_sub = AppleSubscription.get_by(user_id=current_user.id)
@@ -299,6 +370,7 @@ def setting():
     return render_template(
         "dashboard/setting.html",
         csrf_form=csrf_form,
+        decay=get_decay_config(current_user),
         form=form,
         PlanEnum=PlanEnum,
         SenderFormatEnum=SenderFormatEnum,

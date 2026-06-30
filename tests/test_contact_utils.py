@@ -243,3 +243,33 @@ def test_create_contact_with_reply_email():
     assert out.contact is None
     assert out.created is False
     assert out.error == ContactCreateError.InvalidEmail
+
+
+def test_auto_trust_first_contact_when_feature_enabled():
+    # feature on + auto-trust-first-contact on -> first contact's domain is
+    # added to the alias sender allow list
+    user = create_new_user()
+    user.flags = (
+        user.flags | User.FLAG_SENDER_WARNINGS | User.FLAG_AUTO_TRUST_FIRST_CONTACT
+    )
+    alias = Alias.create_new_random(user)
+    Session.commit()
+
+    result = create_contact(random_email(), alias)
+    assert result.error is None
+    Session.refresh(alias)
+    assert alias.sender_allow_list
+
+
+def test_no_auto_trust_when_feature_disabled():
+    # auto-trust-first-contact set but the master switch is off -> allow list
+    # stays empty, and the first-contact lookup is never run
+    user = create_new_user()
+    user.flags = user.flags | User.FLAG_AUTO_TRUST_FIRST_CONTACT
+    alias = Alias.create_new_random(user)
+    Session.commit()
+
+    result = create_contact(random_email(), alias)
+    assert result.error is None
+    Session.refresh(alias)
+    assert not alias.sender_allow_list

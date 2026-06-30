@@ -48,6 +48,7 @@ from app.partner_utils import PartnerData
 from app.pw_models import PasswordOracle
 from app.utils import (
     convert_to_id,
+    get_registered_domain,
     random_string,
     random_words,
     sanitize_email,
@@ -411,6 +412,10 @@ class User(Base, ModelMixin, UserMixin, PasswordOracle):
     FLAG_CREATED_FROM_PARTNER = 1 << 1
     FLAG_FREE_OLD_ALIAS_LIMIT = 1 << 2
     FLAG_CREATED_ALIAS_FROM_PARTNER = 1 << 3
+    FLAG_AUTO_TRUST_FIRST_CONTACT = 1 << 4
+    FLAG_MARKER_IN_SUBJECT = 1 << 5
+    # master switch for the unexpected-sender warning feature
+    FLAG_SENDER_WARNINGS = 1 << 6
 
     email = sa.Column(sa.String(256), unique=True, nullable=False)
 
@@ -619,6 +624,11 @@ class User(Base, ModelMixin, UserMixin, PasswordOracle):
         nullable=False,
     )
 
+    # per-user decay config for the unexpected-sender warning feature
+    # (tiers / glyphs / auto-trust terminus). NULL = built-in defaults.
+    # See app/sender_warning_utils.py and docs/sender-warnings-spec.md.
+    sender_warning_decay = sa.Column(sa.JSON, nullable=True, default=None)
+
     # Keep original unsub behaviour
     unsub_behaviour = sa.Column(
         IntEnumType(UnsubscribeBehaviourEnum),
@@ -676,6 +686,21 @@ class User(Base, ModelMixin, UserMixin, PasswordOracle):
         return User.FLAG_CREATED_FROM_PARTNER == (
             self.flags & User.FLAG_CREATED_FROM_PARTNER
         )
+
+    @property
+    def auto_trust_first_contact(self) -> bool:
+        return User.FLAG_AUTO_TRUST_FIRST_CONTACT == (
+            self.flags & User.FLAG_AUTO_TRUST_FIRST_CONTACT
+        )
+
+    @property
+    def marker_in_subject(self) -> bool:
+        return User.FLAG_MARKER_IN_SUBJECT == (self.flags & User.FLAG_MARKER_IN_SUBJECT)
+
+    @property
+    def sender_warnings_enabled(self) -> bool:
+        """master switch for the unexpected-sender warning feature"""
+        return User.FLAG_SENDER_WARNINGS == (self.flags & User.FLAG_SENDER_WARNINGS)
 
     @staticmethod
     def subdomain_is_available():
@@ -1611,6 +1636,9 @@ class Alias(Base, ModelMixin):
     # the name to use when user replies/sends from alias
     name = sa.Column(sa.String(128), nullable=True, default=None)
 
+    # optional list of domains that must match the sender email. if not matching, email is marked with a warning marker
+    sender_allow_list = sa.Column(sa.JSON(), nullable=True, default=None)
+
     enabled = sa.Column(sa.Boolean(), default=True, nullable=False)
     flags = sa.Column(
         sa.BigInteger(), default=0, server_default="0", nullable=False, index=True
@@ -1954,6 +1982,37 @@ class Alias(Base, ModelMixin):
     def __repr__(self):
         return f"<Alias {self.id} {self.email}>"
 
+    def get_sender_allow_domains(self) -> set:
+        if not self.sender_allow_list:
+            return set()
+        return set(self.sender_allow_list)
+
+    def set_sender_allow_domains(self, domains: set):
+        if not domains:
+            self.sender_allow_list = None
+            return
+
+        # Normalise to lowercase and extract registered domains
+        extracted_domains = set()
+        for d in domains:
+            registered_domain = get_registered_domain(d)
+            if registered_domain:
+                extracted_domains.add(registered_domain)
+
+        if not extracted_domains:
+            self.sender_allow_list = None
+            return
+
+        self.sender_allow_list = list(extracted_domains)
+
+    def is_sender_allowed(self, email_or_domain: str) -> bool:
+        if not self.sender_allow_list:
+            return True  # implicitly allowed if list is not active
+
+        registered_domain = get_registered_domain(email_or_domain)
+
+        return registered_domain in self.sender_allow_list
+
 
 class ClientUser(Base, ModelMixin):
     __tablename__ = "client_user"
@@ -2122,6 +2181,24 @@ class Contact(Base, ModelMixin):
     @property
     def email(self):
         return self.website_email
+
+    @property
+    def domain_in_allow_list(self) -> bool:
+        email_to_check = (
+            self.mail_from
+            if self.mail_from and self.mail_from != "<>"
+            else self.website_email
+        )
+        return self.alias.is_sender_allowed(email_to_check)
+
+    @property
+    def registered_domain(self) -> str:
+        email_to_extract = (
+            self.mail_from
+            if self.mail_from and self.mail_from != "<>"
+            else self.website_email
+        )
+        return get_registered_domain(email_to_extract)
 
     @classmethod
     def create(cls, **kw):

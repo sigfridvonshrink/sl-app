@@ -627,6 +627,51 @@ def test_delete_contact(flask_client):
     assert r.json == {"deleted": True}
 
 
+def test_delete_contact_keeps_trusted_domain(flask_client):
+    """Deleting a contact never auto-removes a trusted domain.
+
+    A domain may be trusted on purpose (manually, or ahead of a sender); when its last
+    contact is deleted it lingers as a visible "orphan" in the allow-list panel rather
+    than being silently removed. See docs/sender-warnings-spec.md.
+    """
+    user, api_key = get_new_user_and_api_key()
+
+    alias = Alias.create_new_random(user)
+    alias.sender_allow_list = ["example.com"]
+    Session.commit()
+
+    contact = Contact.create(
+        alias_id=alias.id,
+        website_email="contact@example.com",
+        reply_email="reply+random@sl.io",
+        user_id=alias.user_id,
+    )
+
+    contact2 = Contact.create(
+        alias_id=alias.id,
+        website_email="other@example.com",
+        reply_email="reply+random2@sl.io",
+        user_id=alias.user_id,
+    )
+    Session.commit()
+
+    # Delete the first contact: domain stays trusted (still has contact2).
+    r = flask_client.delete(
+        url_for("api.delete_contact", contact_id=contact.id),
+        headers={"Authentication": api_key.code},
+    )
+    assert r.status_code == 200
+    assert "example.com" in alias.sender_allow_list
+
+    # Delete the last contact: domain remains as a trusted orphan, NOT auto-removed.
+    r = flask_client.delete(
+        url_for("api.delete_contact", contact_id=contact2.id),
+        headers={"Authentication": api_key.code},
+    )
+    assert r.status_code == 200
+    assert "example.com" in alias.sender_allow_list
+
+
 def test_get_alias(flask_client):
     user, api_key = get_new_user_and_api_key()
 
@@ -767,3 +812,63 @@ def test_cannot_create_alias_with_admin_disabled_mailbox_via_api(flask_client):
     else:
         # Alias creation was blocked
         assert r.status_code >= 400
+
+
+def test_toggle_allow_domain(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    Contact.create(
+        alias_id=alias.id,
+        website_email="a@known.com",
+        reply_email="r1@sl.io",
+        user_id=user.id,
+    )
+    Session.commit()
+
+    url = url_for("api.toggle_alias_allow_domain", alias_id=alias.id)
+
+    # trust the domain (sent as a full email; normalized to registered domain)
+    r = flask_client.post(
+        url, headers={"Authentication": api_key.code}, json={"domain": "a@known.com"}
+    )
+    assert r.status_code == 200
+    assert r.json["domain"] == "known.com"
+    assert r.json["in_list"] is True
+    assert any(d["domain"] == "known.com" for d in r.json["trusted"])
+    assert r.json["counts"]["trusted"] == 1
+    assert r.json["counts"]["marked"] == 0
+
+    # toggle again -> removed; domain returns to the marked group (contact still exists)
+    r = flask_client.post(
+        url, headers={"Authentication": api_key.code}, json={"domain": "known.com"}
+    )
+    assert r.status_code == 200
+    assert r.json["in_list"] is False
+    assert any(d["domain"] == "known.com" for d in r.json["marked"])
+    assert r.json["counts"]["trusted"] == 0
+
+
+def test_toggle_allow_domain_requires_domain(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    r = flask_client.post(
+        url_for("api.toggle_alias_allow_domain", alias_id=alias.id),
+        headers={"Authentication": api_key.code},
+        json={},
+    )
+    assert r.status_code == 400
+
+
+def test_toggle_allow_domain_forbidden_for_other_user(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    other, _ = get_new_user_and_api_key()
+    alias = Alias.create_new_random(other)
+    Session.commit()
+    r = flask_client.post(
+        url_for("api.toggle_alias_allow_domain", alias_id=alias.id),
+        headers={"Authentication": api_key.code},
+        json={"domain": "known.com"},
+    )
+    assert r.status_code == 403
