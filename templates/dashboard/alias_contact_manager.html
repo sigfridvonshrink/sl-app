@@ -14,9 +14,22 @@
            href="#howtouse"
            role="button"
            aria-expanded="false"
-           aria-controls="collapseExample">
+           aria-controls="howtouse">
           How to use <i class="fe fe-chevrons-down"></i>
         </a>
+        {% if sender_warnings_enabled %}
+
+          <a id="domainpanel-link"
+             class="ml-3 text-info"
+             style="font-size: 12px"
+             data-toggle="collapse"
+             href="#domainpanel"
+             role="button"
+             aria-expanded="false"
+             aria-controls="domainpanel">
+            trusted domains <i class="fe fe-chevrons-down"></i>
+          </a>
+        {% endif %}
       </h1>
       <div class="alert alert-primary collapse" id="howtouse" role="alert">
         <p>
@@ -57,6 +70,40 @@
           </a>
         </p>
       </div>
+      {% if sender_warnings_enabled %}
+
+        {% set decay = current_user.sender_warning_decay_config %}
+        <div class="collapse" id="domainpanel">
+          <div class="alert alert-secondary" role="alert">
+            <div id="domainpanel-status" class="mb-3"></div>
+            <div class="mb-1">
+              <strong>Trusted domains</strong>
+            </div>
+            <div id="domainpanel-trusted" class="mb-3"></div>
+            <div class="mb-1">
+              <strong>Marked domains</strong> <span class="text-muted small">(their emails get a marker)</span>
+            </div>
+            <div id="domainpanel-flagged" class="mb-3"></div>
+            <hr class="my-2" />
+            <a class="text-info"
+               style="font-size: 12px"
+               data-toggle="collapse"
+               href="#domainpanel-help"
+               role="button"
+               aria-expanded="false"
+               aria-controls="domainpanel-help">
+              How this works <i class="fe fe-chevrons-down"></i>
+            </a>
+            <div class="collapse small text-muted mt-2" id="domainpanel-help">
+              Senders from a trusted domain arrive clean. Others get a marker that fades as the
+              sender becomes familiar: <span class="mx-1">{{ decay.tiers[0].marker }} new</span> ·
+              <span class="mx-1">{{ decay.tiers[1].marker }} familiar</span> ·
+              <span class="mx-1">{{ decay.floor_marker }} established</span>.
+              Click a domain to trust or un-trust it.
+            </div>
+          </div>
+        </div>
+      {% endif %}
     </div>
   </div>
   {% if can_create_contacts %}
@@ -95,10 +142,10 @@
         {% if query %}
           {% if highlight_contact_id %}
 
-            <a href="{{ url_for("dashboard.alias_contact_manager", alias_id=alias.id, highlight_contact_id=highlight_contact_id) }}"
+            <a href="{{ url_for('dashboard.alias_contact_manager', alias_id=alias.id, highlight_contact_id=highlight_contact_id) }}"
                class="btn btn-light">Reset</a>
           {% else %}
-            <a href="{{ url_for("dashboard.alias_contact_manager", alias_id=alias.id) }}"
+            <a href="{{ url_for('dashboard.alias_contact_manager', alias_id=alias.id) }}"
                class="btn btn-light">Reset</a>
           {% endif %}
         {% endif %}
@@ -114,6 +161,18 @@
           <div class="mb-2 row">
             <div class="col">
               <span class="font-weight-bold">{{ contact.website_email }}</span>
+              {% if sender_warnings_enabled %}
+
+                {# marker filled in by JS (renderContactTags) from the server-computed
+                   panel state, so the page avoids a per-contact query on load #}
+                <span class="sender-marker-label-{{ contact.id }} ml-1 sender-warning-tag"
+                      data-contact="{{ contact.id }}"
+                      data-contact-domain="{{ contact.registered_domain }}"
+                      role="button"
+                      tabindex="0"
+                      title="manage trusted domains"
+                      style="cursor: pointer"></span>
+              {% endif %}
               {% if contact.pgp_finger_print %}
 
                 <span class="cursor"
@@ -250,7 +309,7 @@
     async function blockContact(contactID, contactEmail) {
       let oldValue;
       try {
-        let res = await fetch(`/api/contacts/${contactID}/toggle`, {
+        let res = await fetch(`/api/contacts/${contactID}/toggle?ui_tag=1`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -266,6 +325,10 @@
           } else {
             toastr.success(`${contactEmail} is unblocked`);
           }
+
+          // blocking clears a contact's marker; repaint it from the server value
+          $(`.sender-marker-label-${contactID}`).text(json.ui_tag || "");
+
         } else {
           toastr.error("Sorry for the inconvenience! Could you refresh the page & retry please?", "Unknown Error");
           // reset to the original value
@@ -279,5 +342,111 @@
         $(this).prop("checked", oldValue);
       }
     }
+
+    {% if sender_warnings_enabled %}
+    // --- Unexpected-sender warnings: trusted-domain panel ---
+    // The server computes all state (decay tiers, trusted/flagged grouping, contact
+    // tags). This script only paints what the server returns; no tier logic lives here.
+    const ALLOW_LIST_TOGGLE_URL = "/api/aliases/{{ alias.id }}/toggle_allow_domain";
+    let allowListState = {{ allow_list_state | tojson }};
+
+    function chipEl(domain, trusted, count, orphan) {
+      let cls = trusted ? "badge-success" : "badge-light";
+      let icon = trusted ? '<i class="fe fe-check"></i> ' : "";
+      let countTxt = (count && count > 1) ? ` ·${count}` : "";
+      let dim = orphan ? ' style="opacity:.6;"' : "";
+      let stale = orphan ? ' <span class="text-muted">(stale)</span>' : "";
+      let safeDomain = $("<i>").text(domain).html();
+      return $(
+        `<span class="badge badge-pill ${cls} mr-1 mb-1 sender-domain-chip" ` +
+        `data-domain="${domain}" role="button" tabindex="0"${dim} ` +
+        `data-toggle="tooltip" title="${trusted ? 'Trusted — click to untrust' : 'Marked — click to trust'}">` +
+        `${icon}${safeDomain}${countTxt}${stale}</span>`
+      );
+    }
+
+    function renderContactTags(tags) {
+      $(".sender-warning-tag").each(function () {
+        $(this).text(tags[$(this).data("contact")] || "");
+      });
+    }
+
+    function renderPanel(state) {
+      allowListState = state;
+      // dispose tooltips on the current chips first, otherwise the shown tooltip of the
+      // clicked chip is orphaned in <body> when the chip is replaced below.
+      if (typeof $.fn.tooltip !== "undefined") $('#domainpanel [data-toggle="tooltip"]').tooltip("dispose");
+      let trustedBox = $("#domainpanel-trusted").empty();
+      let flaggedBox = $("#domainpanel-flagged").empty();
+
+      (state.trusted || []).forEach(d =>
+        trustedBox.append(chipEl(d.domain, true, d.contacts, d.orphan)));
+      (state.flagged || []).forEach(d =>
+        flaggedBox.append(chipEl(d.domain, false, d.contacts, false)));
+
+      if (!(state.trusted || []).length)
+        trustedBox.html('<span class="text-muted small">None yet — click a marked domain to trust it.</span>');
+      if (!(state.flagged || []).length)
+        flaggedBox.html('<span class="text-muted small">All known domains trusted.</span>');
+
+      let c = state.counts || { trusted: 0, flagged: 0 };
+      let statusBox = $("#domainpanel-status").empty();
+      if (c.trusted) {
+        statusBox.append('<div class="font-weight-bold">Warnings active for this alias</div>');
+        statusBox.append($('<div class="text-muted small">').text(`${c.trusted} trusted · ${c.flagged} marked`));
+      } else {
+        statusBox.append('<div class="font-weight-bold">Warnings off for this alias</div>');
+        statusBox.append('<div class="text-muted small">Trust a domain to start marking the others.</div>');
+      }
+
+      renderContactTags(state.contact_tags || {});
+      if (typeof $.fn.tooltip !== "undefined") $('#domainpanel [data-toggle="tooltip"]').tooltip();
+    }
+
+    async function toggleDomain(domain) {
+      try {
+        let res = await fetch(ALLOW_LIST_TOGGLE_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", '{{HEADER_ALLOW_API_COOKIES}}': 'allow' },
+          body: JSON.stringify({ domain: domain })
+        });
+        if (res.ok) {
+          let json = await res.json();
+          toastr.success(`${json.domain} ${json.in_list ? "trusted" : "un-trusted"}`);
+          renderPanel(json);
+          let moved = $(`#domainpanel .sender-domain-chip[data-domain="${json.domain}"]`);
+          moved.addClass("highlight-row");
+          setTimeout(() => moved.removeClass("highlight-row"), 1000);
+        } else {
+          toastr.error("Sorry for the inconvenience! Could you refresh the page & retry please?", "Unknown Error");
+        }
+      } catch (e) {
+        toastr.error("Sorry for the inconvenience! Could you refresh the page & retry please?", "Unknown Error");
+      }
+    }
+
+    $("#domainpanel").on("click keypress", ".sender-domain-chip", function (e) {
+      if (e.type === "keypress" && e.which !== 13 && e.which !== 32) return;
+      e.preventDefault();
+      toggleDomain($(this).data("domain"));
+    });
+
+    // click a contact's marker -> open the panel and highlight that domain's chip
+    $(document).on("click keypress", ".sender-warning-tag", function (e) {
+      if (e.type === "keypress" && e.which !== 13 && e.which !== 32) return;
+      let domain = $(this).data("contact-domain");
+      $("#domainpanel").collapse("show");
+      setTimeout(() => {
+        let chip = $(`#domainpanel .sender-domain-chip[data-domain="${domain}"]`);
+        if (chip.length) {
+          chip[0].scrollIntoView({ behavior: "smooth", block: "center" });
+          chip.addClass("highlight-row");
+          setTimeout(() => chip.removeClass("highlight-row"), 1200);
+        }
+      }, 350);
+    });
+
+    $(function () { if (allowListState) renderPanel(allowListState); });
+    {% endif %}
   </script>
 {% endblock %}

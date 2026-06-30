@@ -11,7 +11,6 @@ from wtforms import StringField, validators, ValidationError
 
 # Need to import directly from config to allow modification from the tests
 from app import config, parallel_limiter, contact_utils
-from app.alias_audit_log_utils import emit_alias_audit_log, AliasAuditLogAction
 from app.contact_utils import ContactCreateError
 from app.dashboard.base import dashboard_bp
 from app.db import Session
@@ -200,13 +199,7 @@ def delete_contact(alias: Alias, contact_id: int):
         flash("You cannot delete reverse-alias", "warning")
     else:
         delete_contact_email = contact.website_email
-        emit_alias_audit_log(
-            alias=alias,
-            action=AliasAuditLogAction.DeleteContact,
-            message=f"Delete contact {contact_id} ({contact.email})",
-        )
-        Contact.delete(contact_id)
-        Session.commit()
+        contact_utils.perform_contact_deletion(contact)
 
         flash(f"Reverse-alias for {delete_contact_email} has been deleted", "success")
 
@@ -302,6 +295,15 @@ def alias_contact_manager(alias_id):
             + contact_infos
         )
 
+    # unexpected-sender warning panel state, computed server-side so the
+    # template/JS never derive decay tiers. Only built when the feature is enabled.
+    sender_warnings_enabled = current_user.sender_warnings_enabled
+    allow_list_state = None
+    if sender_warnings_enabled:
+        from app.sender_warning_utils import build_allow_list_state
+
+        allow_list_state = build_allow_list_state(alias)
+
     return render_template(
         "dashboard/alias_contact_manager.html",
         contact_infos=contact_infos,
@@ -314,4 +316,6 @@ def alias_contact_manager(alias_id):
         nb_contact=nb_contact,
         can_create_contacts=current_user.can_create_contacts(),
         csrf_form=csrf_form,
+        sender_warnings_enabled=sender_warnings_enabled,
+        allow_list_state=allow_list_state,
     )

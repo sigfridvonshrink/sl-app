@@ -35,7 +35,7 @@
             <div>
               {% if paddle_sub.cancelled %}(Cancelled){% endif %}
               {{ paddle_sub.plan_name() }} plan subscribed via Paddle.
-              <a href="{{ url_for("dashboard.billing") }}">Manage Subscription ➡</a>
+              <a href="{{ url_for('dashboard.billing') }}">Manage Subscription ➡</a>
             </div>
           {% endif %}
           {% if manual_sub and manual_sub.is_active() %}
@@ -48,7 +48,7 @@
                 <br />
                 To gain additional features and support SimpleLogin you can upgrade to a Premium plan.
                 <br />
-                <a href="{{ url_for("dashboard.pricing") }}"
+                <a href="{{ url_for('dashboard.pricing') }}"
                    class="btn btn-sm btn-outline-primary">Upgrade</a>
               {% endif %}
             </div>
@@ -61,7 +61,7 @@
               <div class="alert alert-info">
                 If you want to subscribe via the Web instead, please make sure to cancel your subscription
                 on Apple first.
-                <a href="{{ url_for("dashboard.pricing") }}">
+                <a href="{{ url_for('dashboard.pricing') }}">
                   Upgrade <i class="fa fa-arrow-right" aria-hidden="true"></i>
                 </a>
               </div>
@@ -205,7 +205,7 @@
 
               <div class="alert alert-info" role="alert">
                 This feature is only available on Premium plan.
-                <a href="{{ url_for("dashboard.pricing") }}"
+                <a href="{{ url_for('dashboard.pricing') }}"
                    target="_blank"
                    rel="noopener noreferrer">
                   Upgrade<i class="fe fe-external-link"></i>
@@ -428,7 +428,7 @@
                         <br />
                         This is an exceptional case where SimpleLogin temporarily stores the email.
                       </div>
-                      <a href="{{ url_for("dashboard.refused_email_route") }}"
+                      <a href="{{ url_for('dashboard.refused_email_route') }}"
                          class="btn btn-outline-primary">See quarantine & bounce emails</a>
                     </div>
                   </div>
@@ -483,63 +483,207 @@
                         <input type="hidden" name="form-name" value="alias-delete-action">
                         <select class="form-control mr-sm-2" name="alias-delete-action">
                           <option value="{{ UserAliasDeleteAction.MoveToTrash.value }}" {% if current_user.alias_delete_action.value == UserAliasDeleteAction.MoveToTrash.value %}
-                            selected="selected"{% endif %}>Move to Trash</option>
+                             selected="selected"{% endif %}>Move to Trash</option>
                           <option value="{{ UserAliasDeleteAction.DeleteImmediately.value }}" {% if current_user.alias_delete_action.value == UserAliasDeleteAction.DeleteImmediately.value %}
-                            selected="selected"{% endif %}>Delete immediately</option>
+                             selected="selected"{% endif %}>Delete immediately</option>
                         </select>
                         <button class="btn btn-outline-primary">Update</button>
                       </form>
-                      <a href="{{ url_for("dashboard.alias_trash") }}"
+                      <a href="{{ url_for('dashboard.alias_trash') }}"
                          class="btn btn-secondary">See alias trash</a>
                     </div>
                   </div>
                   <!-- END Alias delete action -->
-                  <div class="card" id="sender-header">
+                  <!-- START Unexpected sender warnings -->
+                  {% set decay = current_user.sender_warning_decay_config %}
+                  <div class="card" id="sender-warnings">
                     <div class="card-body">
-                      <div class="card-title">Include original sender in email headers</div>
+                      <div class="card-title">Unexpected sender warnings</div>
                       <div class="mb-3">
-                        SimpleLogin forwards emails to your mailbox from the <b>reverse-alias</b> and not from the <b>original</b>
-                        sender address.
-                        <br />
-                        If this option is enabled, the original sender addresses is stored in the email header <b>X-SimpleLogin-Envelope-From</b>
-                        and the original From header is stored in <b>X-SimpleLogin-Original-From</b>.
-                        You can choose to display this header in your email client.
-                        <br />
-                        As email headers aren't encrypted, your mailbox service can know the sender address via this header.
+                        Adds a marker to a forwarded email when an alias receives mail from a
+                        sender domain you have not trusted for that alias. The marker fades as a
+                        sender becomes familiar:
+                        <span class="mx-1">{{ decay.tiers[0].marker }} new</span> ·
+                        <span class="mx-1">{{ decay.tiers[1].marker }} familiar</span> ·
+                        <span class="mx-1">{{ decay.floor_marker }} established</span>.
+                        Off by default; manage trusted domains per alias from the contact page.
                       </div>
-                      <form method="post" action="#sender-header">
+                      <form method="post" action="#sender-warnings">
                         {{ csrf_form.csrf_token }}
-                        <input type="hidden" name="form-name" value="sender-header">
+                        <input type="hidden" name="form-name" value="sender-warnings">
                         <div class="form-check">
-                          <input type="checkbox" id="include-sender-header" name="enable" {% if current_user.include_header_email_header %}checked{% endif %} class="form-check-input">
-                            <label for="include-sender-header">Include sender address in email headers</label>
+                          <input type="checkbox" class="form-check-input" id="enable-warnings" name="enable_warnings" onchange="toggleSenderAdvanced()" {% if current_user.sender_warnings_enabled %}checked{% endif %}>
+                            <label for="enable-warnings">Enable unexpected-sender warnings</label>
                           </div>
-                          <button type="submit" class="btn btn-outline-primary">Update</button>
-                        </form>
-                      </div>
-                    </div>
-                    <!-- Alias import/export -->
-                    <div class="card">
-                      <div class="card-body">
-                        <div class="card-title">Alias import/export</div>
-                        <div class="mb-3">
-                          You can import your aliases created on other platforms into SimpleLogin.
-                          You can also export your aliases to a readable csv format for a future batch import.
-                        </div>
-                        <a href="{{ url_for("dashboard.batch_import_route") }}"
-                           class="btn btn-outline-primary">Batch Import</a>
-                        <a href="{{ url_for("dashboard.alias_export_route") }}"
-                           class="btn btn-outline-secondary">Export Aliases</a>
-                      </div>
-                    </div>
-                    <!-- END Alias import/export -->
-                  </div>
-                {% endblock %}
-                {% block script %}
-                  <script>
+                          <div id="sender-warnings-advanced" class="pl-2 mt-2 {% if not current_user.sender_warnings_enabled %}d-none{% endif %}">
+                            <div class="form-check mb-1">
+                              <input type="checkbox" class="form-check-input" id="auto-trust-first" name="auto_trust_first" {% if current_user.auto_trust_first_contact %}checked{% endif %}>
+                                <label class="form-check-label" for="auto-trust-first">
+                                  Automatically trust the first sender domain for each new alias
+                                </label>
+                              </div>
+                              <div class="text-muted mb-3" style="font-size: 12px">
+                                Applies to all new aliases — the first sender to each is trusted
+                                automatically. Handy when you create an alias for a single contact; leave
+                                it off if you would rather approve sender domains yourself.
+                              </div>
+                              <div class="mb-1">Marker placement</div>
+                              <div class="form-check">
+                                <input class="form-check-input" type="radio" name="marker_in_subject" id="marker-from" value="off" {% if not current_user.marker_in_subject %}checked{% endif %}>
+                                  <label class="form-check-label" for="marker-from">In the From field</label>
+                                </div>
+                                <div class="form-check mb-3">
+                                  <input class="form-check-input" type="radio" name="marker_in_subject" id="marker-subject" value="on" {% if current_user.marker_in_subject %}checked{% endif %}>
+                                    <label class="form-check-label" for="marker-subject">In the Subject line</label>
+                                  </div>
+                                  <a class="d-block mt-3 mb-2 text-info"
+                                     style="font-size: 13px"
+                                     data-toggle="collapse"
+                                     href="#adv-decay"
+                                     role="button"
+                                     aria-expanded="false"
+                                     aria-controls="adv-decay">
+                                    <strong>Fine-tune markers &amp; decay</strong> <i class="fe fe-chevrons-down"></i>
+                                  </a>
+                                  <div class="collapse" id="adv-decay">
+                                    <div class="text-muted mb-2" style="font-size: 12px">
+                                      Fine-tune the markers and how quickly they fade. Defaults suit most setups.
+                                    </div>
+                                    <table class="table table-sm">
+                                      <thead>
+                                        <tr>
+                                          <th>Marker</th>
+                                          <th>Younger than (days)</th>
+                                          <th>…or fewer messages than</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {% for i in range(2) %}
+
+                                          <tr>
+                                            <td>
+                                              <input class="form-control form-control-sm"
+                                                     style="width:5rem"
+                                                     name="tier{{ i }}_marker"
+                                                     value="{{ decay.tiers[i].marker }}"
+                                                     maxlength="8">
+                                            </td>
+                                            <td>
+                                              <input class="form-control form-control-sm"
+                                                     style="width:7rem"
+                                                     type="number"
+                                                     min="1"
+                                                     name="tier{{ i }}_days"
+                                                     value="{{ decay.tiers[i].max_days }}">
+                                            </td>
+                                            <td>
+                                              <input class="form-control form-control-sm"
+                                                     style="width:7rem"
+                                                     type="number"
+                                                     min="0"
+                                                     name="tier{{ i }}_count"
+                                                     value="{{ decay.tiers[i].max_count }}">
+                                            </td>
+                                          </tr>
+                                        {% endfor %}
+                                        <tr>
+                                          <td>
+                                            <input class="form-control form-control-sm"
+                                                   style="width:5rem"
+                                                   name="floor_marker"
+                                                   value="{{ decay.floor_marker }}"
+                                                   maxlength="8">
+                                          </td>
+                                          <td class="text-muted align-middle" colspan="2">everything older</td>
+                                        </tr>
+                                      </tbody>
+                                    </table>
+                                    <div class="mb-2">
+                                      Promote to trusted automatically <span class="text-muted">(leave blank to disable)</span>
+                                    </div>
+                                    <div class="form-inline mb-3">
+                                      after at least
+                                      <input class="form-control form-control-sm mx-2"
+                                             style="width:7rem"
+                                             type="number"
+                                             min="1"
+                                             name="autotrust_days"
+                                             value="{{ decay.auto_trust.min_days if decay.auto_trust else '' }}">
+                                      days and
+                                      <input class="form-control form-control-sm mx-2"
+                                             style="width:7rem"
+                                             type="number"
+                                             min="0"
+                                             name="autotrust_count"
+                                             value="{{ decay.auto_trust.min_count if decay.auto_trust else '' }}">
+                                      messages
+                                    </div>
+                                    <button type="submit"
+                                            name="reset_decay"
+                                            value="1"
+                                            class="btn btn-outline-secondary btn-sm mb-2">
+                                      Reset decay to defaults
+                                    </button>
+                                  </div>
+                                </div>
+                                <div class="mt-3">
+                                  <button type="submit" class="btn btn-outline-primary">Update</button>
+                                </div>
+                              </form>
+                              <script>
+                                function toggleSenderAdvanced() {
+                                  var on = document.getElementById("enable-warnings").checked;
+                                  var adv = document.getElementById("sender-warnings-advanced");
+                                  if (adv) adv.classList.toggle("d-none", !on);
+                                }
+                              </script>
+                            </div>
+                          </div>
+                          <!-- END Unexpected sender warnings -->
+                          <div class="card" id="sender-header">
+                            <div class="card-body">
+                              <div class="card-title">Include original sender in email headers</div>
+                              <div class="mb-3">
+                                SimpleLogin forwards emails to your mailbox from the <b>reverse-alias</b> and not from the <b>original</b>
+                                sender address.
+                                <br />
+                                If this option is enabled, the original sender addresses is stored in the email header <b>X-SimpleLogin-Envelope-From</b>
+                                and the original From header is stored in <b>X-SimpleLogin-Original-From</b>.
+                                You can choose to display this header in your email client.
+                                <br />
+                                As email headers aren't encrypted, your mailbox service can know the sender address via this header.
+                              </div>
+                              <form method="post" action="#sender-header">
+                                {{ csrf_form.csrf_token }}
+                                <input type="hidden" name="form-name" value="sender-header">
+                                <div class="form-check">
+                                  <input type="checkbox" id="include-sender-header" name="enable" {% if current_user.include_header_email_header %}checked{% endif %} class="form-check-input">
+                                    <label for="include-sender-header">Include sender address in email headers</label>
+                                  </div>
+                                  <button type="submit" class="btn btn-outline-primary">Update</button>
+                                </form>
+                              </div>
+                            </div>
+                            <!-- Alias import/export -->
+                            <div class="card">
+                              <div class="card-body">
+                                <div class="card-title">Alias import/export</div>
+                                <div class="mb-3">
+                                  You can import your aliases created on other platforms into SimpleLogin.
+                                  You can also export your aliases to a readable csv format for a future batch import.
+                                </div>
+                                <a href="{{ url_for('dashboard.batch_import_route') }}"
+                                   class="btn btn-outline-primary">Batch Import</a>
+                                <a href="{{ url_for('dashboard.alias_export_route') }}"
+                                   class="btn btn-outline-secondary">Export Aliases</a>
+                              </div>
+                            </div>
+                            <!-- END Alias import/export -->
+                          </div>
+                        {% endblock %}
+                        {% block script %}
+                          <script>
     let anchor = window.location.hash;
     $(anchor).addClass("highlighted")
-
-
-                  </script>
-                {% endblock %}
+                          </script>
+                        {% endblock %}
