@@ -627,6 +627,51 @@ def test_delete_contact(flask_client):
     assert r.json == {"deleted": True}
 
 
+def test_delete_contact_keeps_trusted_domain(flask_client):
+    """Deleting a contact never auto-removes a trusted domain.
+
+    A domain may be trusted on purpose (manually, or ahead of a sender); when its last
+    contact is deleted it lingers as a visible "orphan" in the allow-list panel rather
+    than being silently removed.
+    """
+    user, api_key = get_new_user_and_api_key()
+
+    alias = Alias.create_new_random(user)
+    alias.sender_allow_list = ["example.com"]
+    Session.commit()
+
+    contact = Contact.create(
+        alias_id=alias.id,
+        website_email="contact@example.com",
+        reply_email="reply+random@sl.io",
+        user_id=alias.user_id,
+    )
+
+    contact2 = Contact.create(
+        alias_id=alias.id,
+        website_email="other@example.com",
+        reply_email="reply+random2@sl.io",
+        user_id=alias.user_id,
+    )
+    Session.commit()
+
+    # Delete the first contact: domain stays trusted (still has contact2).
+    r = flask_client.delete(
+        url_for("api.delete_contact", contact_id=contact.id),
+        headers={"Authentication": api_key.code},
+    )
+    assert r.status_code == 200
+    assert "example.com" in alias.sender_allow_list
+
+    # Delete the last contact: domain remains as a trusted orphan, NOT auto-removed.
+    r = flask_client.delete(
+        url_for("api.delete_contact", contact_id=contact2.id),
+        headers={"Authentication": api_key.code},
+    )
+    assert r.status_code == 200
+    assert "example.com" in alias.sender_allow_list
+
+
 def test_get_alias(flask_client):
     user, api_key = get_new_user_and_api_key()
 
@@ -767,3 +812,295 @@ def test_cannot_create_alias_with_admin_disabled_mailbox_via_api(flask_client):
     else:
         # Alias creation was blocked
         assert r.status_code >= 400
+
+
+def test_toggle_allow_domain(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    Contact.create(
+        alias_id=alias.id,
+        website_email="a@known.com",
+        reply_email="r1@sl.io",
+        user_id=user.id,
+    )
+    Session.commit()
+
+    url = url_for("api.toggle_alias_allow_domain", alias_id=alias.id)
+
+    # trust the domain (sent as a full email; normalized to registered domain)
+    r = flask_client.post(
+        url, headers={"Authentication": api_key.code}, json={"domain": "a@known.com"}
+    )
+    assert r.status_code == 200
+    assert r.json["domain"] == "known.com"
+    assert r.json["in_list"] is True
+    assert any(d["domain"] == "known.com" for d in r.json["trusted"])
+    assert r.json["counts"]["trusted"] == 1
+    assert r.json["counts"]["marked"] == 0
+
+    # toggle again -> removed; domain returns to the marked group (contact still exists)
+    r = flask_client.post(
+        url, headers={"Authentication": api_key.code}, json={"domain": "known.com"}
+    )
+    assert r.status_code == 200
+    assert r.json["in_list"] is False
+    assert any(d["domain"] == "known.com" for d in r.json["marked"])
+    assert r.json["counts"]["trusted"] == 0
+
+
+def test_toggle_allow_domain_requires_domain(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    r = flask_client.post(
+        url_for("api.toggle_alias_allow_domain", alias_id=alias.id),
+        headers={"Authentication": api_key.code},
+        json={},
+    )
+    assert r.status_code == 400
+
+
+def test_toggle_allow_domain_forbidden_for_other_user(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    other, _ = get_new_user_and_api_key()
+    alias = Alias.create_new_random(other)
+    Session.commit()
+    r = flask_client.post(
+        url_for("api.toggle_alias_allow_domain", alias_id=alias.id),
+        headers={"Authentication": api_key.code},
+        json={"domain": "known.com"},
+    )
+    assert r.status_code == 403
+
+
+def test_toggle_allow_domain_rejects_malformed(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    url = url_for("api.toggle_alias_allow_domain", alias_id=alias.id)
+    for bad in ['a"><script>.com', "no dot", "-bad.com", "javascript:alert(1)"]:
+        r = flask_client.post(
+            url, headers={"Authentication": api_key.code}, json={"domain": bad}
+        )
+        assert r.status_code == 400, bad
+    Session.refresh(alias)
+    assert not alias.sender_allow_list
+
+
+def test_get_allow_list_state(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    Contact.create(
+        alias_id=alias.id,
+        website_email="a@known.com",
+        reply_email="r@sl.io",
+        user_id=user.id,
+    )
+    Session.commit()
+    r = flask_client.get(
+        url_for("api.get_alias_allow_list_state", alias_id=alias.id),
+        headers={"Authentication": api_key.code},
+    )
+    assert r.status_code == 200
+    assert {"trusted", "marked", "marked_total", "has_more", "counts"} <= set(
+        r.json.keys()
+    )
+    assert "contact_tags" not in r.json  # panel no longer carries all-contact tags
+    assert any(d["domain"] == "known.com" for d in r.json["marked"])
+
+
+def test_allow_list_state_lists_all_marked_within_limit(flask_client, monkeypatch):
+    from app import sender_warning_utils
+    from app.sender_warning_utils import build_allow_list_state
+
+    monkeypatch.setattr(sender_warning_utils, "MARKED_PANEL_LIMIT", 5)
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    for i, d in enumerate(["aaa.com", "bbb.com", "ccc.com"]):
+        Contact.create(
+            alias_id=alias.id,
+            website_email=f"x@{d}",
+            reply_email=f"r{i}@sl.io",
+            user_id=user.id,
+        )
+    alias.set_sender_allow_domains({"trusted.com"})  # arm the feature
+    Session.commit()
+
+    state = build_allow_list_state(alias)
+    assert {m["domain"] for m in state["marked"]} == {"aaa.com", "bbb.com", "ccc.com"}
+    assert state["marked_total"] == 3
+    assert state["has_more"] is False
+
+
+def test_allow_list_state_over_limit_lists_only_page_domains(flask_client, monkeypatch):
+    from app import sender_warning_utils
+    from app.sender_warning_utils import build_allow_list_state
+
+    monkeypatch.setattr(sender_warning_utils, "MARKED_PANEL_LIMIT", 2)
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    for i, d in enumerate(["aaa.com", "bbb.com", "ccc.com"]):
+        Contact.create(
+            alias_id=alias.id,
+            website_email=f"x@{d}",
+            reply_email=f"r{i}@sl.io",
+            user_id=user.id,
+        )
+    alias.set_sender_allow_domains({"trusted.com"})  # arm the feature
+    Session.commit()
+
+    # over the limit, with no page context, nothing is listed but the total is reported
+    state = build_allow_list_state(alias)
+    assert state["marked"] == []
+    assert state["marked_total"] == 3
+    assert state["has_more"] is True
+
+    # a focus domain is listed even over the limit
+    focused = build_allow_list_state(alias, focus_domain="ccc.com")
+    assert [m["domain"] for m in focused["marked"]] == ["ccc.com"]
+
+
+def test_toggle_allow_domain_returns_visible_tags_only(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    c1 = Contact.create(
+        alias_id=alias.id,
+        website_email="a@known.com",
+        reply_email="r1@sl.io",
+        user_id=user.id,
+        flush=True,
+    )
+    Contact.create(
+        alias_id=alias.id,
+        website_email="b@other.com",
+        reply_email="r2@sl.io",
+        user_id=user.id,
+    )
+    Session.commit()
+
+    r = flask_client.post(
+        url_for("api.toggle_alias_allow_domain", alias_id=alias.id),
+        headers={"Authentication": api_key.code},
+        json={"domain": "known.com", "visible_ids": [c1.id]},
+    )
+    assert r.status_code == 200
+    # only the visible contact's tag is returned (the second contact is excluded)
+    assert set(r.json["contact_tags"].keys()) == {str(c1.id)}
+    assert any(d["domain"] == "known.com" for d in r.json["trusted"])
+
+
+def test_get_allow_list_state_forbidden_for_other_user(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    other, _ = get_new_user_and_api_key()
+    alias = Alias.create_new_random(other)
+    Session.commit()
+    r = flask_client.get(
+        url_for("api.get_alias_allow_list_state", alias_id=alias.id),
+        headers={"Authentication": api_key.code},
+    )
+    assert r.status_code == 403
+
+
+def test_allow_list_state_guarantees_visible_domains(flask_client, monkeypatch):
+    from app import sender_warning_utils
+    from app.sender_warning_utils import build_allow_list_state
+
+    monkeypatch.setattr(sender_warning_utils, "MARKED_PANEL_LIMIT", 1)
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    contacts = {}
+    for i, d in enumerate(["aaa.com", "bbb.com", "ccc.com"]):
+        contacts[d] = Contact.create(
+            alias_id=alias.id,
+            website_email=f"x@{d}",
+            reply_email=f"r{i}@sl.io",
+            user_id=user.id,
+            flush=True,
+        )
+    alias.set_sender_allow_domains({"trusted.com"})
+    Session.commit()
+
+    # cap is 1, but a visible contact's domain is guaranteed present past the cap
+    state = build_allow_list_state(alias, visible_ids=[contacts["ccc.com"].id])
+    domains = [m["domain"] for m in state["marked"]]
+    assert "ccc.com" in domains
+
+
+def test_allow_list_state_aggregates_large_alias_in_sql(flask_client, monkeypatch):
+    # A large alias must not load every Contact into ORM objects to build the panel:
+    # domain groups are aggregated in SQL (grouped by sender host, then folded into the
+    # registered domain), and the marked list stays bounded to the page past the cap.
+    from app import sender_warning_utils
+    from app.sender_warning_utils import build_allow_list_state
+
+    monkeypatch.setattr(sender_warning_utils, "MARKED_PANEL_LIMIT", 3)
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+
+    # 10 registered domains, 5 contacts each (5 distinct subdomains that fold to the
+    # same registered domain) -> 50 contacts, far past the cap.
+    for d in range(10):
+        for c in range(5):
+            Contact.create(
+                alias_id=alias.id,
+                user_id=user.id,
+                website_email=f"u{c}@sub{c}.dom{d}.com",
+                reply_email=f"r{d}_{c}@sl.io",
+            )
+    alias.set_sender_allow_domains({"trusted.com"})
+    Session.commit()
+
+    state = build_allow_list_state(alias)
+    # subdomains folded: 10 registered domains marked, not 50 hosts
+    assert state["marked_total"] == 10
+    # over the cap with no page context -> nothing listed, but the total is reported
+    assert state["marked"] == []
+    assert state["has_more"] is True
+
+    # a focus domain stays actionable past the cap and carries its full folded count
+    focused = build_allow_list_state(alias, focus_domain="dom4.com")
+    assert [m["domain"] for m in focused["marked"]] == ["dom4.com"]
+    assert focused["marked"][0]["contacts"] == 5
+
+
+def test_allow_list_state_ignores_cross_alias_visible_ids(flask_client):
+    # visible_ids is caller-supplied: it must be constrained to this alias, so a
+    # contact id belonging to another alias (or user) cannot be probed via the panel.
+    from app.sender_warning_utils import build_allow_list_state
+
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    other_alias = Alias.create_new_random(user)
+    alias.set_sender_allow_domains({"trusted.com"})
+    Session.commit()
+
+    # a marked contact on `alias`, and a foreign contact on `other_alias`
+    mine = Contact.create(
+        alias_id=alias.id,
+        user_id=user.id,
+        website_email="a@mine.com",
+        reply_email="r1@sl.io",
+        flush=True,
+    )
+    foreign = Contact.create(
+        alias_id=other_alias.id,
+        user_id=user.id,
+        website_email="a@foreign.com",
+        reply_email="r2@sl.io",
+        flush=True,
+    )
+    Session.commit()
+
+    # pass the foreign id as visible -> its domain must not surface for `alias`
+    state = build_allow_list_state(alias, visible_ids=[mine.id, foreign.id])
+    domains = {m["domain"] for m in state["marked"]}
+    assert "mine.com" in domains
+    assert "foreign.com" not in domains
