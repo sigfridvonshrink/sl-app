@@ -19,7 +19,9 @@ from app.api.serializer import (
     get_alias_info_v2,
     get_alias_infos_with_pagination_v3,
 )
-from app.contact_utils import contact_toggle_block
+from app.contact_utils import (
+    contact_toggle_block,
+)
 from app.dashboard.views.alias_contact_manager import create_contact
 from app.dashboard.views.alias_log import get_alias_log
 from app.db import Session
@@ -32,6 +34,13 @@ from app.errors import (
 from app.extensions import limiter
 from app.log import LOG
 from app.models import Alias, Contact, Mailbox, AliasDeleteReason
+from app.sender_warning_utils import (
+    build_allow_list_state,
+    build_contact_markers,
+    ui_tag_for_contact,
+    is_valid_registered_domain,
+)
+from app.utils import get_registered_domain
 
 
 @deprecated
@@ -488,4 +497,102 @@ def toggle_contact(contact_id):
         return jsonify(error="Forbidden"), 403
     contact_toggle_block(contact)
 
-    return jsonify(block_forward=contact.block_forward), 200
+    # expose the ui_tag only when the caller opts in,
+    # so the upstream default response shape (and its test) stays unchanged.
+    resp = {"block_forward": contact.block_forward}
+    if request.args.get("ui_tag"):
+        resp["ui_tag"] = ui_tag_for_contact(contact)
+    return jsonify(**resp), 200
+
+
+@api_bp.route("/aliases/<int:alias_id>/toggle_allow_domain", methods=["POST"])
+@require_api_auth
+@limiter.limit("100/hour")
+def toggle_alias_allow_domain(alias_id):
+    """toggle a sender domain in the alias's allow-list.
+
+    Body: {"domain": "<domain or email>", "visible_ids": [<contact ids on the page>]}.
+    The domain is normalized to its registered form. Returns the updated panel state
+    (with the toggled domain pinned) plus contact_tags for just the visible contacts,
+    so the client repaints from the server rather than deriving anything.
+    """
+    user = g.user
+    alias: Optional[Alias] = Alias.get(alias_id)
+
+    if not alias or alias.user_id != user.id:
+        return jsonify(error="Forbidden"), 403
+
+    data = request.get_json(silent=True) or {}
+    raw_domain = (data.get("domain") or "").strip()
+    domain = get_registered_domain(raw_domain) if raw_domain else ""
+    if not domain or not is_valid_registered_domain(domain):
+        return jsonify(error="invalid domain"), 400
+
+    domains = alias.get_sender_allow_domains()
+    if domain in domains:
+        domains.remove(domain)
+        in_list = False
+    else:
+        domains.add(domain)
+        in_list = True
+
+    alias.set_sender_allow_domains(domains)
+    Session.commit()
+
+    # repaint markers only for the contacts currently visible on the page
+    visible_ids = [i for i in (data.get("visible_ids") or []) if isinstance(i, int)]
+    visible_contacts = (
+        Contact.filter(Contact.alias_id == alias.id, Contact.id.in_(visible_ids)).all()
+        if visible_ids
+        else []
+    )
+    return (
+        jsonify(
+            domain=domain,
+            in_list=in_list,
+            contact_tags=build_contact_markers(alias, visible_contacts),
+            **build_allow_list_state(
+                alias, focus_domain=domain, visible_ids=visible_ids
+            ),
+        ),
+        200,
+    )
+
+
+@api_bp.route("/aliases/<int:alias_id>/allow_list_state", methods=["GET"])
+@require_api_auth
+def get_alias_allow_list_state(alias_id):
+    """Allow-list panel state (trusted/marked groups + counts, no per-contact tags).
+
+    Loaded on demand when the dashboard panel is opened, so a normal contact-page
+    render never aggregates across all contacts of the alias. The marked list is
+    capped; an optional ?focus_domain= pins that domain first so it is present even
+    past the cap (used when the panel is opened from a specific contact's marker).
+    """
+    user = g.user
+    alias: Optional[Alias] = Alias.get(alias_id)
+
+    if not alias or alias.user_id != user.id:
+        return jsonify(error="Forbidden"), 403
+
+    focus = request.args.get("focus_domain")
+    focus_domain = None
+    if focus:
+        normalized = get_registered_domain(focus)
+        if normalized and is_valid_registered_domain(normalized):
+            focus_domain = normalized
+
+    visible_ids = [
+        int(x)
+        for x in (request.args.get("visible_ids") or "").split(",")
+        if x.isdigit()
+    ]
+
+    return (
+        jsonify(
+            **build_allow_list_state(
+                alias, focus_domain=focus_domain, visible_ids=visible_ids
+            )
+        ),
+        200,
+    )

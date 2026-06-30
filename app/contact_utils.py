@@ -89,6 +89,18 @@ def create_contact(
     contact = Contact.get_by(alias_id=alias.id, website_email=email)
     if contact is not None:
         return __update_contact_if_needed(contact, name, mail_from)
+
+    # Must be computed before the contact is created below, otherwise the
+    # query would also match the new row. Gated by the feature flags so
+    # non-users never run it — the cheap checks short-circuit the query.
+    is_first_contact = (
+        email != ""
+        and not alias.sender_allow_list
+        and alias.user.sender_warnings_enabled
+        and alias.user.auto_trust_first_contact
+        and Contact.filter_by(alias_id=alias.id).first() is None
+    )
+
     # Create the contact
     reply_email = generate_reply_email(email, alias)
     alias_id = alias.id
@@ -121,6 +133,19 @@ def create_contact(
         LOG.d(
             f"Created contact {contact} for alias {alias} with email {email} invalid_email={is_invalid_email}"
         )
+
+        if is_first_contact:
+            email_to_extract = (
+                email
+                if email
+                else (mail_from if mail_from and mail_from != "<>" else "")
+            )
+            domain = email_to_extract.split("@")[-1] if "@" in email_to_extract else ""
+            if domain:
+                alias.set_sender_allow_domains({domain})
+                Session.add(alias)
+                Session.commit()
+
         return ContactCreateResult(contact, created=True, error=None)
     except CannotCreateContactForReverseAlias as e:
         LOG.i(f"Cannot create contact {email} for alias {alias}: {e}")

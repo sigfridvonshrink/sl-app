@@ -21,6 +21,7 @@ from app.models import (
     IgnoredEmail,
     EmailLog,
     Notification,
+    User,
     VerpType,
     Contact,
     SentAlert,
@@ -598,3 +599,131 @@ def test_reply_preserves_pgp_key_when_config_disabled(flask_client):
         assert pgp_attachments[0].get_filename() == f"publickey - {user.email}.asc"
     finally:
         config.DROP_PGP_KEY_ATTACHMENTS_ON_REPLY = original
+
+
+def _decode_header_value(value):
+    from email.header import decode_header, make_header
+
+    return str(make_header(decode_header(value)))
+
+
+def _forward_msg(from_addr, alias_email, subject="Hello there friend today"):
+    msg = EmailMessage()
+    msg["From"] = from_addr
+    msg["To"] = alias_email
+    msg["Subject"] = subject
+    msg["Message-ID"] = "<fwd-sender-warning-test@evil.example.com>"
+    msg["Date"] = "Wed, 01 Jul 2026 10:00:00 +0000"
+    msg.set_content("hello")
+    return msg
+
+
+@mail_sender.store_emails_test_decorator
+def test_forward_marks_untrusted_sender(flask_client):
+    # armed alias (non-empty allow-list) + untrusted sender -> marker in the From
+    user = create_new_user()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    alias.set_sender_allow_domains({"trusted.com"})
+    Session.commit()
+
+    envelope = Envelope()
+    envelope.mail_from = "attacker@evil.example.com"
+    envelope.rcpt_tos = [alias.email]
+    assert (
+        email_handler.handle(
+            envelope, _forward_msg("attacker@evil.example.com", alias.email)
+        )
+        == status.E200
+    )
+    sent = mail_sender.get_stored_emails()
+    assert len(sent) == 1
+    assert "◆◆" in _decode_header_value(sent[0].msg["From"])
+
+
+@mail_sender.store_emails_test_decorator
+def test_forward_no_marker_for_trusted_sender(flask_client):
+    # sender's domain is trusted -> no marker
+    user = create_new_user()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    alias.set_sender_allow_domains({"evil.example.com"})
+    Session.commit()
+
+    envelope = Envelope()
+    envelope.mail_from = "attacker@evil.example.com"
+    envelope.rcpt_tos = [alias.email]
+    assert (
+        email_handler.handle(
+            envelope, _forward_msg("attacker@evil.example.com", alias.email)
+        )
+        == status.E200
+    )
+    sent = mail_sender.get_stored_emails()
+    assert len(sent) == 1
+    from_dec = _decode_header_value(sent[0].msg["From"])
+    assert "◆" not in from_dec and "·" not in from_dec
+
+
+@mail_sender.store_emails_test_decorator
+def test_forward_no_marker_when_feature_disabled(flask_client):
+    # feature off -> no marker even with a populated allow-list
+    user = create_new_user()
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    alias.set_sender_allow_domains({"trusted.com"})
+    Session.commit()
+
+    envelope = Envelope()
+    envelope.mail_from = "attacker@evil.example.com"
+    envelope.rcpt_tos = [alias.email]
+    assert (
+        email_handler.handle(
+            envelope, _forward_msg("attacker@evil.example.com", alias.email)
+        )
+        == status.E200
+    )
+    sent = mail_sender.get_stored_emails()
+    assert len(sent) == 1
+    from_dec = _decode_header_value(sent[0].msg["From"])
+    assert "◆" not in from_dec and "·" not in from_dec
+
+
+def test_bounded_contact_email_count_caps_at_decay_bound(flask_client):
+    from app.sender_warning_utils import bounded_contact_email_count
+
+    user = create_new_user()
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    contact = Contact.create(
+        user_id=user.id,
+        alias_id=alias.id,
+        website_email="sender@external.com",
+        reply_email=f"{random_string()}@{EMAIL_DOMAIN}",
+        commit=True,
+    )
+    # below the default bound (6): returns the true count
+    for i in range(3):
+        EmailLog.create(
+            contact_id=contact.id,
+            user_id=user.id,
+            mailbox_id=user.default_mailbox_id,
+            alias_id=alias.id,
+            message_id=f"below-{i}@test",
+            commit=True,
+        )
+    assert bounded_contact_email_count(contact, user) == 3
+
+    # push past the bound: the count saturates at 6 instead of scanning all rows
+    for i in range(10):
+        EmailLog.create(
+            contact_id=contact.id,
+            user_id=user.id,
+            mailbox_id=user.default_mailbox_id,
+            alias_id=alias.id,
+            message_id=f"above-{i}@test",
+            commit=True,
+        )
+    assert bounded_contact_email_count(contact, user) == 6
