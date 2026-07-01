@@ -6,6 +6,7 @@ fork's behaviour is locked without editing an upstream test.
 
 from app.db import Session
 from app.models import Alias, Contact
+from app.sender_warning_utils import ui_tag_for_contact
 from tests.utils import login
 
 
@@ -44,4 +45,4 @@ def test_toggle_contact_includes_ui_tag_when_opted_in(flask_client):
     assert r.status_code == 200
     assert r.json["block_forward"] is True
     assert "ui_tag" in r.json
-    assert r.json["ui_tag"] == contact.ui_tag
+    assert r.json["ui_tag"] == ui_tag_for_contact(contact)

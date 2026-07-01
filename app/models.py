@@ -48,6 +48,7 @@ from app.partner_utils import PartnerData
 from app.pw_models import PasswordOracle
 from app.utils import (
     convert_to_id,
+    get_registered_domain,
     random_string,
     random_words,
     sanitize_email,
@@ -700,13 +701,6 @@ class User(Base, ModelMixin, UserMixin, PasswordOracle):
     def sender_warnings_enabled(self) -> bool:
         """master switch for the unexpected-sender warning feature"""
         return User.FLAG_SENDER_WARNINGS == (self.flags & User.FLAG_SENDER_WARNINGS)
-
-    @property
-    def sender_warning_decay_config(self) -> dict:
-        """effective decay config (stored or built-in defaults)"""
-        from app.sender_warning_utils import get_decay_config
-
-        return get_decay_config(self)
 
     @staticmethod
     def subdomain_is_available():
@@ -1994,8 +1988,6 @@ class Alias(Base, ModelMixin):
         return set(self.sender_allow_list)
 
     def set_sender_allow_domains(self, domains: set):
-        from app.utils import get_registered_domain
-
         if not domains:
             self.sender_allow_list = None
             return
@@ -2016,8 +2008,6 @@ class Alias(Base, ModelMixin):
     def is_sender_allowed(self, email_or_domain: str) -> bool:
         if not self.sender_allow_list:
             return True  # implicitly allowed if list is not active
-
-        from app.utils import get_registered_domain
 
         registered_domain = get_registered_domain(email_or_domain)
 
@@ -2203,27 +2193,12 @@ class Contact(Base, ModelMixin):
 
     @property
     def registered_domain(self) -> str:
-        from app.utils import get_registered_domain
-
         email_to_extract = (
             self.mail_from
             if self.mail_from and self.mail_from != "<>"
             else self.website_email
         )
         return get_registered_domain(email_to_extract)
-
-    @property
-    def ui_tag(self) -> str:
-        """Dashboard mirror of the marker the mailbox would see for this sender.
-
-        Empty unless the feature is on and the alias has an active allow-list. For
-        rendering many contacts at once, prefer sender_warning_utils.build_allow_list_state,
-        which computes all markers from a single batched message count.
-        """
-        from app.sender_warning_utils import marker_for_contact
-
-        emails_count = EmailLog.filter_by(contact_id=self.id).count()
-        return marker_for_contact(self, emails_count, self.alias.user)
 
     @classmethod
     def create(cls, **kw):

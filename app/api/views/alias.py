@@ -34,7 +34,7 @@ from app.errors import (
 from app.extensions import limiter
 from app.log import LOG
 from app.models import Alias, Contact, Mailbox, AliasDeleteReason
-from app.sender_warning_utils import build_allow_list_state
+from app.sender_warning_utils import build_allow_list_state, ui_tag_for_contact
 from app.utils import get_registered_domain
 
 
@@ -496,7 +496,7 @@ def toggle_contact(contact_id):
     # so the upstream default response shape (and its test) stays unchanged.
     resp = {"block_forward": contact.block_forward}
     if request.args.get("ui_tag"):
-        resp["ui_tag"] = contact.ui_tag
+        resp["ui_tag"] = ui_tag_for_contact(contact)
     return jsonify(**resp), 200
 
 

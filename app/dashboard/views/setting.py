@@ -25,6 +25,11 @@ from app.db import Session
 from app.extensions import limiter
 from app.image_validation import detect_image_format, ImageFormat
 from app.log import LOG
+from app.sender_warning_utils import (
+    get_decay_config,
+    validate_decay_config,
+    DecayConfigError,
+)
 from app.models import (
     BlockBehaviourEnum,
     PlanEnum,
@@ -289,7 +294,6 @@ def setting():
             # one form for the unexpected-sender warning feature -- master
             # switch plus the advanced options (placement, auto-trust-first, and the
             # tunable decay ladder).
-            from app.sender_warning_utils import validate_decay_config, DecayConfigError
 
             enable = request.form.get("enable_warnings") == "on"
             auto_trust = request.form.get("auto_trust_first") == "on"
@@ -366,6 +370,7 @@ def setting():
     return render_template(
         "dashboard/setting.html",
         csrf_form=csrf_form,
+        decay=get_decay_config(current_user),
         form=form,
         PlanEnum=PlanEnum,
         SenderFormatEnum=SenderFormatEnum,
