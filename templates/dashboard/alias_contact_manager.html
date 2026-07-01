@@ -75,27 +75,32 @@
         {% set decay = current_user.sender_warning_decay_config %}
         <div class="collapse" id="domainpanel">
           <div class="alert alert-secondary" role="alert">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-              <strong>Trusted domains for this alias</strong>
-              <span id="domainpanel-counts" class="text-muted small"></span>
+            <div id="domainpanel-status" class="mb-3"></div>
+            <div class="mb-1">
+              <strong>Trusted domains</strong>
             </div>
-            <div id="domainpanel-mode" class="text-muted small mb-2"></div>
-            <div class="small text-muted mb-3">
+            <div id="domainpanel-trusted" class="mb-3"></div>
+            <div class="mb-1">
+              <strong>Marked domains</strong> <span class="text-muted small">(their emails get a marker)</span>
+            </div>
+            <div id="domainpanel-flagged" class="mb-3"></div>
+            <hr class="my-2" />
+            <a class="text-info"
+               style="font-size: 12px"
+               data-toggle="collapse"
+               href="#domainpanel-help"
+               role="button"
+               aria-expanded="false"
+               aria-controls="domainpanel-help">
+              How this works <i class="fe fe-chevrons-down"></i>
+            </a>
+            <div class="collapse small text-muted mt-2" id="domainpanel-help">
               Senders from a trusted domain arrive clean. Others get a marker that fades as the
               sender becomes familiar: <span class="mx-1">{{ decay.tiers[0].marker }} new</span> ·
               <span class="mx-1">{{ decay.tiers[1].marker }} familiar</span> ·
               <span class="mx-1">{{ decay.floor_marker }} established</span>.
               Click a domain to trust or un-trust it.
             </div>
-            <div class="mb-1">
-              <strong>Trusted</strong>
-            </div>
-            <div id="domainpanel-trusted" class="mb-3"></div>
-            <hr class="my-2" />
-            <div class="mb-1">
-              <strong>Marked</strong> <span class="text-muted small">(their emails get a marker)</span>
-            </div>
-            <div id="domainpanel-flagged"></div>
           </div>
         </div>
       {% endif %}
@@ -385,10 +390,14 @@
         flaggedBox.html('<span class="text-muted small">All known domains trusted.</span>');
 
       let c = state.counts || { trusted: 0, flagged: 0 };
-      $("#domainpanel-counts").text(`${c.trusted} trusted · ${c.flagged} marked`);
-      $("#domainpanel-mode").text(c.trusted
-        ? "Trusted senders arrive clean; all others get a marker."
-        : "Warnings off for this alias — trust a domain to start marking the rest.");
+      let statusBox = $("#domainpanel-status").empty();
+      if (c.trusted) {
+        statusBox.append('<div class="font-weight-bold">Warnings active for this alias</div>');
+        statusBox.append($('<div class="text-muted small">').text(`${c.trusted} trusted · ${c.flagged} marked`));
+      } else {
+        statusBox.append('<div class="font-weight-bold">Warnings off for this alias</div>');
+        statusBox.append('<div class="text-muted small">Trust a domain to start marking the others.</div>');
+      }
 
       renderContactTags(state.contact_tags || {});
       if (typeof $.fn.tooltip !== "undefined") $('#domainpanel [data-toggle="tooltip"]').tooltip();
