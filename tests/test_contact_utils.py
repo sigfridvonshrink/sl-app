@@ -273,3 +273,48 @@ def test_no_auto_trust_when_feature_disabled():
     assert result.error is None
     Session.refresh(alias)
     assert not alias.sender_allow_list
+
+
+def test_sender_domain_source_prefers_website_email():
+    # visible From (website_email) wins over envelope sender (mail_from)
+    user = create_new_user()
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    contact = create_contact(
+        "alice@visible.com", alias, mail_from="bounce@infra.example.com"
+    ).contact
+    assert contact.sender_domain_source == "alice@visible.com"
+    assert contact.registered_domain == "visible.com"
+
+
+def test_sender_domain_source_falls_back_to_mail_from():
+    # no website_email -> narrow fallback to the envelope sender
+    user = create_new_user()
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    contact = create_contact(
+        "", alias, mail_from="bounce@infra.example.com", allow_empty_email=True
+    ).contact
+    assert contact.sender_domain_source == "bounce@infra.example.com"
+    assert contact.registered_domain == "example.com"
+
+
+def test_ui_trust_matches_forward_decision_on_website_email():
+    # trusting the visible domain makes both the UI marker and the forward-path
+    # check agree; trusting the infra (mail_from) domain does not.
+    user = create_new_user()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    contact = create_contact(
+        "alice@visible.com", alias, mail_from="bounce@infra.example.com"
+    ).contact
+
+    alias.set_sender_allow_domains({"visible.com"})
+    Session.commit()
+    assert contact.domain_in_allow_list is True
+    assert alias.is_sender_allowed(contact.sender_domain_source) is True
+
+    alias.set_sender_allow_domains({"example.com"})
+    Session.commit()
+    assert contact.domain_in_allow_list is False

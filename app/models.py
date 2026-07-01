@@ -2183,22 +2183,28 @@ class Contact(Base, ModelMixin):
         return self.website_email
 
     @property
+    def sender_domain_source(self) -> str:
+        """Email the trusted/unexpected-sender domain is derived from.
+
+        website_email (the visible From address) is the single source of truth;
+        mail_from (the envelope sender) is only a fallback for contacts with no
+        website_email. The dashboard panel, the forward-path warning check, and
+        the auto-trust terminus must all use this so the domain a user trusts is
+        the same one forwarding evaluates.
+        """
+        if self.website_email:
+            return self.website_email
+        if self.mail_from and self.mail_from != "<>":
+            return self.mail_from
+        return ""
+
+    @property
     def domain_in_allow_list(self) -> bool:
-        email_to_check = (
-            self.mail_from
-            if self.mail_from and self.mail_from != "<>"
-            else self.website_email
-        )
-        return self.alias.is_sender_allowed(email_to_check)
+        return self.alias.is_sender_allowed(self.sender_domain_source)
 
     @property
     def registered_domain(self) -> str:
-        email_to_extract = (
-            self.mail_from
-            if self.mail_from and self.mail_from != "<>"
-            else self.website_email
-        )
-        return get_registered_domain(email_to_extract)
+        return get_registered_domain(self.sender_domain_source)
 
     @classmethod
     def create(cls, **kw):
