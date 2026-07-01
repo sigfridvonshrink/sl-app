@@ -626,7 +626,7 @@ class User(Base, ModelMixin, UserMixin, PasswordOracle):
 
     # per-user decay config for the unexpected-sender warning feature
     # (tiers / glyphs / auto-trust terminus). NULL = built-in defaults.
-    # See app/sender_warning_utils.py and docs/sender-warnings-spec.md.
+    # See app/sender_warning_utils.py.
     sender_warning_decay = sa.Column(sa.JSON, nullable=True, default=None)
 
     # Keep original unsub behaviour
