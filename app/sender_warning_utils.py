@@ -11,7 +11,7 @@ Single source of truth for the feature:
 
 The thresholds/glyphs live here once; the email handler, the contact-manager view,
 and the toggle endpoint all call into this module so there is no duplicated decay
-logic in templates or JavaScript. See docs/sender-warnings-spec.md.
+logic in templates or JavaScript.
 """
 
 import copy

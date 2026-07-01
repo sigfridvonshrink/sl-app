@@ -632,7 +632,7 @@ def test_delete_contact_keeps_trusted_domain(flask_client):
 
     A domain may be trusted on purpose (manually, or ahead of a sender); when its last
     contact is deleted it lingers as a visible "orphan" in the allow-list panel rather
-    than being silently removed. See docs/sender-warnings-spec.md.
+    than being silently removed.
     """
     user, api_key = get_new_user_and_api_key()
 
