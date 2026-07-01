@@ -24,7 +24,11 @@ from app.errors import (
 )
 from app.log import LOG
 from app.models import Alias, Contact, EmailLog
-from app.sender_warning_utils import build_contact_markers, get_decay_config
+from app.sender_warning_utils import (
+    build_contact_markers,
+    get_decay_config,
+    TRUSTED_MARKER,
+)
 from app.utils import CSRFValidationForm
 
 
@@ -328,5 +332,6 @@ def alias_contact_manager(alias_id):
         csrf_form=csrf_form,
         sender_warnings_enabled=sender_warnings_enabled,
         contact_markers=contact_markers,
+        trusted_marker=TRUSTED_MARKER,
         decay=get_decay_config(current_user),
     )

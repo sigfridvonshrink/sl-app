@@ -7,6 +7,7 @@ import pytest
 
 from app.sender_warning_utils import (
     get_warning_marker,
+    warning_tier_index,
     should_auto_trust,
     insert_marker_in_subject,
     insert_marker_in_from,
@@ -353,3 +354,32 @@ def test_is_valid_registered_domain_accepts(domain):
 )
 def test_is_valid_registered_domain_rejects(domain):
     assert not is_valid_registered_domain(domain)
+
+
+# warning_tier_index: numeric state that drives both the email glyph and the
+# dashboard label (0 = tiers[0], 1 = tiers[1], 2 = floor for the default 2-tier ladder)
+def test_warning_tier_index_new_contact():
+    assert warning_tier_index(_contact(hours_ago=1), 10) == 0
+
+
+def test_warning_tier_index_low_count():
+    assert warning_tier_index(_contact(hours_ago=1000), 2) == 0
+
+
+def test_warning_tier_index_middle():
+    assert warning_tier_index(_contact(hours_ago=100), 10) == 1
+
+
+def test_warning_tier_index_floor():
+    assert warning_tier_index(_contact(hours_ago=1000), 10) == 2
+
+
+def test_email_glyph_matches_tier_index():
+    # guards the "email output stays byte-identical" contract: the injected glyph
+    # is exactly the configured marker for the computed tier index
+    glyphs = [t["marker"] for t in DEFAULT_DECAY["tiers"]] + [
+        DEFAULT_DECAY["floor_marker"]
+    ]
+    for hours, count in [(1, 10), (1000, 2), (100, 10), (1000, 10)]:
+        c = _contact(hours_ago=hours)
+        assert get_warning_marker(c, count) == glyphs[warning_tier_index(c, count)]

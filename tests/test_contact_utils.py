@@ -329,7 +329,49 @@ def test_build_contact_markers_is_bounded_to_given_contacts():
     Session.commit()
     c1 = create_contact("a@x-domain.com", alias).contact
     create_contact("b@y-domain.com", alias).contact  # second contact, not requested
+    alias.set_sender_allow_domains({"trusted.com"})  # non-empty -> contacts get a state
+    Session.commit()
 
     markers = build_contact_markers(alias, [c1])
     assert set(markers.keys()) == {str(c1.id)}  # only the given contact
     assert build_contact_markers(alias, []) == {}
+
+
+def test_warning_state_for_contact_trusted_marked_blocked():
+    from app.sender_warning_utils import warning_state_for_contact, TRUSTED_STATE
+
+    user = create_new_user()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    contact = create_contact("a@sender.com", alias).contact
+
+    # empty allow-list -> nothing shown
+    assert warning_state_for_contact(contact, 0) is None
+
+    # trust the sender's domain -> trusted state
+    alias.set_sender_allow_domains({"sender.com"})
+    Session.commit()
+    assert warning_state_for_contact(contact, 0) == TRUSTED_STATE
+
+    # trust a different domain -> contact is marked (warning tier index >= 0)
+    alias.set_sender_allow_domains({"other.com"})
+    Session.commit()
+    assert warning_state_for_contact(contact, 0) >= 0
+
+    # blocked contact -> nothing shown
+    contact.block_forward = True
+    Session.commit()
+    assert warning_state_for_contact(contact, 0) is None
+
+
+def test_warning_state_for_contact_none_when_feature_off():
+    from app.sender_warning_utils import warning_state_for_contact
+
+    user = create_new_user()  # feature off by default
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    contact = create_contact("a@sender.com", alias).contact
+    alias.set_sender_allow_domains({"other.com"})
+    Session.commit()
+    assert warning_state_for_contact(contact, 0) is None
