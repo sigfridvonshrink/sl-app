@@ -375,16 +375,27 @@ def apply_marker_to_from(
 def strip_marker_from_subject(subject: str, user) -> str:
     """Remove a previously-inserted marker from a reply-phase subject.
 
-    Matches against the user's current marker glyphs (longest first). Only strips a
-    marker found near the start of the subject (after an optional "Re:"-style prefix).
+    insert_marker_in_subject produces exactly two shapes: the marker wrapped in
+    single spaces mid-subject (" <tag> ", where it replaced an existing space), or
+    the marker appended with no separator when the subject had no usable space.
+    Reverse those two shapes only, so the marker is removed regardless of subject
+    length or any reply/forward prefix the client prepended, without touching
+    unrelated content. Markers are matched against the user's current glyphs,
+    longest first (so a two-glyph marker is tried before a one-glyph substring).
     """
     if not subject:
         return subject
     for tag in get_configured_markers(user):
-        idx = subject.find(tag)
-        if idx != -1 and 8 <= idx <= 18:
-            new_subject = subject.replace(tag + " ", "", 1)
-            if tag in new_subject:  # fallback if there was no trailing space
-                new_subject = subject.replace(tag, "", 1)
-            return new_subject
+        if not tag:
+            continue
+        spaced = f" {tag} "
+        if spaced in subject:
+            # mid-subject insertion: collapse " <tag> " back to the single space
+            return subject.replace(spaced, " ", 1)
+        if subject.endswith(tag):
+            # appended (no-separator) insertion on a space-less subject
+            return subject[: -len(tag)]
+        if subject.startswith(f"{tag} "):
+            # marker landed at the very start (subject began with a space)
+            return subject[len(tag) + 1 :]
     return subject
