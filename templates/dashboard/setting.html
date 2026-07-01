@@ -535,7 +535,9 @@
                                 </div>
                                 <div class="form-check mb-1">
                                   <input type="checkbox" class="form-check-input" id="auto-trust-first" name="auto_trust_first" {% if current_user.auto_trust_first_contact %}checked{% endif %}>
-                                    <label class="form-check-label" for="auto-trust-first">Auto-trust the first sender to each new alias</label>
+                                    <label class="form-check-label" for="auto-trust-first">
+                                      Automatically trust the first sender domain for each new alias
+                                    </label>
                                   </div>
                                   <div class="text-muted mb-3" style="font-size: 12px">
                                     Applies to all new aliases — the first sender to each is trusted

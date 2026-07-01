@@ -27,7 +27,7 @@
              role="button"
              aria-expanded="false"
              aria-controls="domainpanel">
-            trusted senders <i class="fe fe-chevrons-down"></i>
+            trusted domains <i class="fe fe-chevrons-down"></i>
           </a>
         {% endif %}
       </h1>
@@ -76,7 +76,7 @@
         <div class="collapse" id="domainpanel">
           <div class="alert alert-secondary" role="alert">
             <div class="d-flex justify-content-between align-items-center mb-2">
-              <strong>Trusted sender domains for this alias</strong>
+              <strong>Trusted domains for this alias</strong>
               <span id="domainpanel-counts" class="text-muted small"></span>
             </div>
             <div id="domainpanel-mode" class="text-muted small mb-2"></div>
@@ -93,7 +93,7 @@
             <div id="domainpanel-trusted" class="mb-3"></div>
             <hr class="my-2" />
             <div class="mb-1">
-              <strong>Flagged</strong> <span class="text-muted small">(their emails get a marker)</span>
+              <strong>Marked</strong> <span class="text-muted small">(their emails get a marker)</span>
             </div>
             <div id="domainpanel-flagged"></div>
           </div>
@@ -165,7 +165,7 @@
                       data-contact-domain="{{ contact.registered_domain }}"
                       role="button"
                       tabindex="0"
-                      title="manage trusted senders"
+                      title="manage trusted domains"
                       style="cursor: pointer"></span>
               {% endif %}
               {% if contact.pgp_finger_print %}
@@ -355,7 +355,7 @@
       return $(
         `<span class="badge badge-pill ${cls} mr-1 mb-1 sender-domain-chip" ` +
         `data-domain="${domain}" role="button" tabindex="0"${dim} ` +
-        `data-toggle="tooltip" title="${trusted ? 'un-trust' : 'trust'} ${safeDomain}">` +
+        `data-toggle="tooltip" title="${trusted ? 'Trusted — click to untrust' : 'Marked — click to trust'}">` +
         `${icon}${safeDomain}${countTxt}${stale}</span>`
       );
     }
@@ -380,15 +380,15 @@
         flaggedBox.append(chipEl(d.domain, false, d.contacts, false)));
 
       if (!(state.trusted || []).length)
-        trustedBox.html('<span class="text-muted small">None yet — click a flagged domain to trust it.</span>');
+        trustedBox.html('<span class="text-muted small">None yet — click a marked domain to trust it.</span>');
       if (!(state.flagged || []).length)
-        flaggedBox.html('<span class="text-muted small">All known senders trusted.</span>');
+        flaggedBox.html('<span class="text-muted small">All known domains trusted.</span>');
 
       let c = state.counts || { trusted: 0, flagged: 0 };
-      $("#domainpanel-counts").text(`${c.trusted} trusted · ${c.flagged} flagged`);
+      $("#domainpanel-counts").text(`${c.trusted} trusted · ${c.flagged} marked`);
       $("#domainpanel-mode").text(c.trusted
         ? "Trusted senders arrive clean; all others get a marker."
-        : "Warnings off for this alias — trust a domain to start flagging the rest.");
+        : "Warnings off for this alias — trust a domain to start marking the rest.");
 
       renderContactTags(state.contact_tags || {});
       if (typeof $.fn.tooltip !== "undefined") $('#domainpanel [data-toggle="tooltip"]').tooltip();
