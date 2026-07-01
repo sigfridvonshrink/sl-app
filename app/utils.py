@@ -8,6 +8,7 @@ from typing import List, Optional
 import time
 from flask_wtf import FlaskForm
 from unidecode import unidecode
+import tldextract
 
 from .config import WORDS_FILE_PATH, ALLOWED_REDIRECT_DOMAINS
 from .log import LOG
@@ -15,6 +16,11 @@ from .log import LOG
 with open(WORDS_FILE_PATH) as f:
     LOG.d("load words file: %s", WORDS_FILE_PATH)
     _words = f.read().split()
+
+# Offline registered-domain extractor: suffix_list_urls=() forces tldextract to use its
+# bundled Public Suffix List snapshot instead of fetching/refreshing it over the network,
+# so it is safe to call from the email path. Built once at import, not per call.
+_tld_extract = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=False)
 
 
 def random_word():
@@ -27,12 +33,10 @@ def word_exist(word):
 
 def get_registered_domain(email_or_domain: str) -> str:
     """Extract the registered domain from an email address or domain string."""
-    import tldextract
-
     domain = (
         email_or_domain.split("@")[-1] if "@" in email_or_domain else email_or_domain
     )
-    ext = tldextract.extract(domain)
+    ext = _tld_extract(domain)
     return (
         ext.registered_domain.lower() if ext.registered_domain else ext.domain.lower()
     )
