@@ -185,38 +185,54 @@ def _contact_age_days(contact: Contact) -> float:
     return (arrow.utcnow() - contact.created_at).total_seconds() / 86400
 
 
-def get_warning_marker(contact: Contact, email_log_count: int, user=None) -> str:
-    """Marker for a non-trusted sender, per the user's decay ladder (or defaults).
+def warning_tier_index(contact: Contact, email_log_count: int, user=None) -> int:
+    """Decay tier a non-trusted sender falls in: 0..len(tiers)-1 for the configured
+    tiers, or len(tiers) for the floor.
 
     A tier holds while the contact is younger than its max_days OR has no more than
-    max_count messages (conservative -- stays loud while recent or sparse). Below the
-    last tier, the floor marker applies. With no user, the built-in default ladder is
-    used.
+    max_count messages (conservative -- stays loud while recent or sparse). This is
+    presentation-free; the glyph and the dashboard label are both derived from it.
     """
     cfg = get_decay_config(user)
     age_days = _contact_age_days(contact)
-    for tier in cfg["tiers"]:
+    for i, tier in enumerate(cfg["tiers"]):
         if age_days < tier["max_days"] or email_log_count <= tier["max_count"]:
-            return tier["marker"]
-    return cfg["floor_marker"]
+            return i
+    return len(cfg["tiers"])
 
 
-def marker_for_contact(contact: Contact, email_log_count: int, user=None) -> str:
-    """Dashboard/mail marker for a contact given a known message count.
+def get_warning_marker(contact: Contact, email_log_count: int, user=None) -> str:
+    """Marker glyph for a non-trusted sender, per the user's decay ladder (or defaults).
 
-    Centralizes the visibility rules so the model property, the panel builder, and
-    the email path all agree. Returns "" when nothing should be shown.
+    Used by the email path to inject the actual glyph. With no user, the built-in
+    default ladder is used.
+    """
+    cfg = get_decay_config(user)
+    markers = [t["marker"] for t in cfg["tiers"]] + [cfg["floor_marker"]]
+    return markers[warning_tier_index(contact, email_log_count, user)]
+
+
+TRUSTED_STATE = -1
+
+
+def warning_state_for_contact(contact: Contact, email_log_count: int, user=None):
+    """Semantic dashboard state for a contact's marker (presentation-free).
+
+    None when nothing should be shown; TRUSTED_STATE (-1) for a trusted sender; else
+    the warning tier index (0..len(tiers)). The client maps this to the glyph and the
+    label; the email path uses get_warning_marker for the actual glyph. Centralizes
+    the visibility rules so the panel builder and the single-contact endpoint agree.
     """
     user = user or contact.alias.user
     if not user.sender_warnings_enabled:
-        return ""
+        return None
     if contact.block_forward:
-        return ""
+        return None
     if not contact.alias.sender_allow_list:
-        return ""
+        return None
     if contact.domain_in_allow_list:
-        return TRUSTED_MARKER
-    return get_warning_marker(contact, email_log_count, user)
+        return TRUSTED_STATE
+    return warning_tier_index(contact, email_log_count, user)
 
 
 def should_auto_trust(contact: Contact, email_log_count: int, user=None) -> bool:
@@ -262,15 +278,15 @@ def is_valid_registered_domain(domain: str) -> bool:
     return all(_DOMAIN_LABEL_RE.match(label) for label in ascii_domain.split("."))
 
 
-def ui_tag_for_contact(contact: Contact) -> str:
-    """Dashboard mirror of the marker the mailbox would see for this sender.
+def ui_tag_for_contact(contact: Contact):
+    """Dashboard marker state for a single contact (see warning_state_for_contact).
 
-    Empty unless the feature is on and the alias has an active allow-list. For
-    rendering many contacts at once, prefer build_allow_list_state, which computes
-    all markers from a single batched message count.
+    None unless the feature is on and the alias has an active allow-list. For rendering
+    many contacts at once, prefer build_contact_markers, which computes all states from
+    a single batched message count.
     """
     emails_count = EmailLog.filter_by(contact_id=contact.id).count()
-    return marker_for_contact(contact, emails_count, contact.alias.user)
+    return warning_state_for_contact(contact, emails_count, contact.alias.user)
 
 
 def build_contact_markers(alias: Alias, contacts) -> dict:
@@ -289,10 +305,12 @@ def build_contact_markers(alias: Alias, contacts) -> dict:
         .group_by(EmailLog.contact_id)
         .all()
     )
-    return {
-        str(c.id): marker_for_contact(c, counts.get(c.id, 0), alias.user)
-        for c in contacts
-    }
+    markers = {}
+    for c in contacts:
+        state = warning_state_for_contact(c, counts.get(c.id, 0), alias.user)
+        if state is not None:
+            markers[str(c.id)] = state
+    return markers
 
 
 def build_allow_list_state(alias: Alias) -> dict:

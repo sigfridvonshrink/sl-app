@@ -325,8 +325,10 @@
             toastr.success(`${contactEmail} is unblocked`);
           }
 
-          // blocking clears a contact's marker; repaint it from the server value
-          $(`.sender-marker-label-${contactID}`).text(json.ui_tag || "");
+          // blocking clears a contact's marker; repaint it from the server state
+          if (typeof renderMarker === "function") {
+            renderMarker($(`.sender-marker-label-${contactID}`), json.ui_tag);
+          }
 
         } else {
           toastr.error("Sorry for the inconvenience! Could you refresh the page & retry please?", "Unknown Error");
@@ -385,9 +387,37 @@
       return $chip;
     }
 
+    // Marker vocabulary, sent once: glyphs come from the decay config (tiers + floor)
+    // plus the trusted glyph. The per-contact payload carries only a numeric state,
+    // mapped here to a glyph and a plain-language label used as the tooltip.
+    const DECAY = {{ decay | tojson }};
+    const TRUSTED_MARKER = {{ trusted_marker | tojson }};
+    const TRUSTED_STATE = -1;  // matches sender_warning_utils.TRUSTED_STATE
+    const MARKER_GLYPHS = DECAY.tiers.map(t => t.marker).concat([DECAY.floor_marker]);
+    const MARKER_LABELS = ["New sender", "Familiar sender", "Established sender"];
+
+    function markerInfo(state) {
+      if (state === null || state === undefined) return { glyph: "", label: "" };
+      if (state === TRUSTED_STATE) return { glyph: TRUSTED_MARKER, label: "Trusted sender" };
+      return {
+        glyph: MARKER_GLYPHS[state] || MARKER_GLYPHS[MARKER_GLYPHS.length - 1],
+        label: MARKER_LABELS[state] || "Unexpected sender"
+      };
+    }
+
+    function renderMarker($el, state) {
+      let info = markerInfo(state);
+      $el.text(info.glyph);
+      if (info.label) {
+        $el.attr("title", info.label + " — click to manage trusted domains");
+      } else {
+        $el.removeAttr("title");
+      }
+    }
+
     function renderContactTags(tags) {
       $(".sender-warning-tag").each(function () {
-        $(this).text(tags[$(this).data("contact")] || "");
+        renderMarker($(this), tags[$(this).data("contact")]);
       });
     }
 
