@@ -46,10 +46,10 @@ MAX_DECAY_COUNT = config.SENDER_WARNING_MAX_DECAY_COUNT
 # Built-in decay ladder, used when the user has no custom config.
 DEFAULT_DECAY = {
     "tiers": [
-        {"marker": "⚠️⚠️", "max_days": 1, "max_count": 2},
-        {"marker": "⚠️", "max_days": 8, "max_count": 5},
+        {"marker": "◇◇", "max_days": 1, "max_count": 2},
+        {"marker": "◇", "max_days": 8, "max_count": 5},
     ],
-    "floor_marker": "〰️",
+    "floor_marker": "·",
     "auto_trust": None,
 }
 
@@ -161,6 +161,36 @@ def get_decay_config(user) -> dict:
     except DecayConfigError:
         LOG.w("Invalid sender_warning_decay for user %s, using defaults", user)
         return copy.deepcopy(DEFAULT_DECAY)
+
+
+def decay_count_bound(user) -> int:
+    """Smallest email count that saturates every decay decision for this user.
+
+    The marker/auto-trust logic only compares the contact's message count against the
+    tier `max_count` thresholds and the optional `auto_trust.min_count`; the exact total
+    above the largest of those is never used. So counting past this bound is wasted work.
+    Returns largest relevant threshold + 1 (so a value strictly greater than every
+    threshold is still distinguishable from a value that merely equals one).
+    """
+    cfg = get_decay_config(user)
+    thresholds = [t["max_count"] for t in cfg["tiers"]]
+    auto_trust = cfg.get("auto_trust")
+    if auto_trust:
+        thresholds.append(auto_trust["min_count"])
+    return max(thresholds) + 1
+
+
+def bounded_contact_email_count(contact: Contact, user) -> int:
+    """Contact's forwarded-message count, capped at decay_count_bound(user).
+
+    Replaces an unbounded COUNT over the contact's email_log rows on the mail hot path
+    (and the per-contact dashboard state): the decay ladder saturates at a handful of
+    messages, so a bounded LIMIT scan is O(bound) instead of O(history) yet yields an
+    identical marker. Capped values still exceed every threshold, so tier selection is
+    unchanged.
+    """
+    bound = decay_count_bound(user)
+    return EmailLog.filter_by(contact_id=contact.id).limit(bound).count()
 
 
 def get_configured_markers(user) -> list:
@@ -285,7 +315,7 @@ def ui_tag_for_contact(contact: Contact):
     many contacts at once, prefer build_contact_markers, which computes all states from
     a single batched message count.
     """
-    emails_count = EmailLog.filter_by(contact_id=contact.id).count()
+    emails_count = bounded_contact_email_count(contact, contact.alias.user)
     return warning_state_for_contact(contact, emails_count, contact.alias.user)
 
 

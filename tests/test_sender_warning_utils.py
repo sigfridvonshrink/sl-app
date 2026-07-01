@@ -16,6 +16,7 @@ from app.sender_warning_utils import (
     sanitize_marker,
     validate_decay_config,
     get_configured_markers,
+    decay_count_bound,
     strip_marker_from_subject,
     is_valid_registered_domain,
     DecayConfigError,
@@ -34,23 +35,23 @@ def _contact(hours_ago: float):
 
 
 def test_get_warning_marker_double_warning_for_new_contact():
-    assert get_warning_marker(_contact(hours_ago=1), email_log_count=10) == "⚠️⚠️"
+    assert get_warning_marker(_contact(hours_ago=1), email_log_count=10) == "◇◇"
 
 
 def test_get_warning_marker_double_warning_for_low_count():
-    assert get_warning_marker(_contact(hours_ago=1000), email_log_count=2) == "⚠️⚠️"
+    assert get_warning_marker(_contact(hours_ago=1000), email_log_count=2) == "◇◇"
 
 
 def test_get_warning_marker_single_warning_by_age():
-    assert get_warning_marker(_contact(hours_ago=100), email_log_count=10) == "⚠️"
+    assert get_warning_marker(_contact(hours_ago=100), email_log_count=10) == "◇"
 
 
 def test_get_warning_marker_single_warning_by_count():
-    assert get_warning_marker(_contact(hours_ago=1000), email_log_count=5) == "⚠️"
+    assert get_warning_marker(_contact(hours_ago=1000), email_log_count=5) == "◇"
 
 
 def test_get_warning_marker_settled_contact():
-    assert get_warning_marker(_contact(hours_ago=1000), email_log_count=10) == "〰️"
+    assert get_warning_marker(_contact(hours_ago=1000), email_log_count=10) == "·"
 
 
 # insert_marker_in_subject: insert at the 3rd / 2nd / 1st non-consecutive space
@@ -151,10 +152,33 @@ def test_sanitize_marker_accepts_emoji():
     assert sanitize_marker("⚠️⚠️") == "⚠️⚠️"
 
 
+# decay_count_bound: cap for the bounded hot-path email count
+def test_decay_count_bound_defaults():
+    # default tiers max_count = 2, 5; no auto_trust -> largest threshold + 1
+    assert decay_count_bound(_user(None)) == 6
+
+
+def test_decay_count_bound_includes_auto_trust_min_count():
+    cfg = {
+        "tiers": [
+            {"marker": "a", "max_days": 1, "max_count": 2},
+            {"marker": "b", "max_days": 8, "max_count": 5},
+        ],
+        "floor_marker": "c",
+        "auto_trust": {"min_days": 10, "min_count": 40},
+    }
+    # auto_trust.min_count (40) dominates the tier thresholds
+    assert decay_count_bound(_user(cfg)) == 41
+
+
+def test_decay_count_bound_bad_config_falls_back_to_defaults():
+    assert decay_count_bound(_user({"tiers": "garbage"})) == 6
+
+
 # validate_decay_config
 def test_validate_decay_config_defaults_roundtrip():
     cfg = validate_decay_config(dict(DEFAULT_DECAY))
-    assert cfg["tiers"][0]["marker"] == "⚠️⚠️"
+    assert cfg["tiers"][0]["marker"] == "◇◇"
     assert cfg["auto_trust"] is None
 
 

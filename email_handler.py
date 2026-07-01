@@ -107,6 +107,7 @@ from app.email_validation import is_valid_email, normalize_reply_email
 from app.sender_warning_utils import (
     get_warning_marker,
     should_auto_trust,
+    bounded_contact_email_count,
     apply_marker_to_subject,
     apply_marker_to_from,
     strip_marker_from_subject,
@@ -913,7 +914,7 @@ def forward_email_to_mailbox(
 
     marker_tag = None
     if sender_not_trusted:
-        emails_count = EmailLog.filter_by(contact_id=contact.id).count()
+        emails_count = bounded_contact_email_count(contact, user)
         if should_auto_trust(contact, emails_count, user):
             # decay terminus: a long-known sender is promoted into the trusted set
             # (recorded, reversible) instead of carrying a marker forever.

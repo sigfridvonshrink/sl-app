@@ -639,7 +639,7 @@ def test_forward_marks_untrusted_sender(flask_client):
     )
     sent = mail_sender.get_stored_emails()
     assert len(sent) == 1
-    assert "⚠️⚠️" in _decode_header_value(sent[0].msg["From"])
+    assert "◇◇" in _decode_header_value(sent[0].msg["From"])
 
 
 @mail_sender.store_emails_test_decorator
@@ -664,7 +664,7 @@ def test_forward_no_marker_for_trusted_sender(flask_client):
     sent = mail_sender.get_stored_emails()
     assert len(sent) == 1
     from_dec = _decode_header_value(sent[0].msg["From"])
-    assert "⚠️" not in from_dec and "〰️" not in from_dec
+    assert "◇" not in from_dec and "·" not in from_dec
 
 
 @mail_sender.store_emails_test_decorator
@@ -688,4 +688,42 @@ def test_forward_no_marker_when_feature_disabled(flask_client):
     sent = mail_sender.get_stored_emails()
     assert len(sent) == 1
     from_dec = _decode_header_value(sent[0].msg["From"])
-    assert "⚠️" not in from_dec and "〰️" not in from_dec
+    assert "◇" not in from_dec and "·" not in from_dec
+
+
+def test_bounded_contact_email_count_caps_at_decay_bound(flask_client):
+    from app.sender_warning_utils import bounded_contact_email_count
+
+    user = create_new_user()
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    contact = Contact.create(
+        user_id=user.id,
+        alias_id=alias.id,
+        website_email="sender@external.com",
+        reply_email=f"{random_string()}@{EMAIL_DOMAIN}",
+        commit=True,
+    )
+    # below the default bound (6): returns the true count
+    for i in range(3):
+        EmailLog.create(
+            contact_id=contact.id,
+            user_id=user.id,
+            mailbox_id=user.default_mailbox_id,
+            alias_id=alias.id,
+            message_id=f"below-{i}@test",
+            commit=True,
+        )
+    assert bounded_contact_email_count(contact, user) == 3
+
+    # push past the bound: the count saturates at 6 instead of scanning all rows
+    for i in range(10):
+        EmailLog.create(
+            contact_id=contact.id,
+            user_id=user.id,
+            mailbox_id=user.default_mailbox_id,
+            alias_id=alias.id,
+            message_id=f"above-{i}@test",
+            commit=True,
+        )
+    assert bounded_contact_email_count(contact, user) == 6
