@@ -538,3 +538,21 @@ def toggle_alias_allow_domain(alias_id):
     Session.commit()
 
     return jsonify(domain=domain, in_list=in_list, **build_allow_list_state(alias)), 200
+
+
+@api_bp.route("/aliases/<int:alias_id>/allow_list_state", methods=["GET"])
+@require_api_auth
+def get_alias_allow_list_state(alias_id):
+    """Full allow-list panel state (trusted/marked groups, per-contact tags, counts).
+
+    Loaded on demand when the dashboard panel is opened, so a normal contact-page
+    render only computes markers for the contacts on the page (build_contact_markers)
+    and never aggregates across all contacts of the alias.
+    """
+    user = g.user
+    alias: Optional[Alias] = Alias.get(alias_id)
+
+    if not alias or alias.user_id != user.id:
+        return jsonify(error="Forbidden"), 403
+
+    return jsonify(**build_allow_list_state(alias)), 200

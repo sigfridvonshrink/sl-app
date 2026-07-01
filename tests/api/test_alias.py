@@ -886,3 +886,35 @@ def test_toggle_allow_domain_rejects_malformed(flask_client):
         assert r.status_code == 400, bad
     Session.refresh(alias)
     assert not alias.sender_allow_list
+
+
+def test_get_allow_list_state(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    Contact.create(
+        alias_id=alias.id,
+        website_email="a@known.com",
+        reply_email="r@sl.io",
+        user_id=user.id,
+    )
+    Session.commit()
+    r = flask_client.get(
+        url_for("api.get_alias_allow_list_state", alias_id=alias.id),
+        headers={"Authentication": api_key.code},
+    )
+    assert r.status_code == 200
+    assert {"trusted", "marked", "contact_tags", "counts"} <= set(r.json.keys())
+    assert any(d["domain"] == "known.com" for d in r.json["marked"])
+
+
+def test_get_allow_list_state_forbidden_for_other_user(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    other, _ = get_new_user_and_api_key()
+    alias = Alias.create_new_random(other)
+    Session.commit()
+    r = flask_client.get(
+        url_for("api.get_alias_allow_list_state", alias_id=alias.id),
+        headers={"Authentication": api_key.code},
+    )
+    assert r.status_code == 403
