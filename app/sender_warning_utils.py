@@ -313,12 +313,28 @@ def build_contact_markers(alias: Alias, contacts) -> dict:
     return markers
 
 
-def build_allow_list_state(alias: Alias) -> dict:
-    """Per-alias panel state for the dashboard and the toggle endpoint.
+# Above this many marked domains the panel stops listing them all and shows only the
+# domains actionable from the current page (visible contacts + focus); the remainder is
+# reported via marked_total / has_more. At or below it, every marked domain is listed.
+MARKED_PANEL_LIMIT = 50
 
-    Returns the trusted/marked domain groups (alphabetical, with contact counts and
-    orphan flags), the per-contact dashboard markers, and the group counts. Message
-    counts are fetched in a single grouped query to avoid a per-contact lookup.
+
+def build_allow_list_state(
+    alias: Alias, focus_domain: str = None, visible_ids=None
+) -> dict:
+    """Trusted/marked domain groups for the dashboard panel.
+
+    Aggregated across all of the alias's contacts (the domain groups need every
+    contact). When there are at most MARKED_PANEL_LIMIT marked domains they are all
+    listed; when there are more, only the domains actionable from the current page are
+    listed — an explicit focus_domain plus the domains of the visible contacts
+    (visible_ids), pinned first — and the remainder is reported via marked_total /
+    has_more (+N more). So the panel is always bounded yet always able to act on what
+    is on screen.
+
+    Per-contact markers are NOT included here: the contact page paints markers for its
+    visible contacts (build_contact_markers), so the panel never carries all-contact
+    tags.
     """
     trusted_set = alias.get_sender_allow_domains()
     contacts = Contact.filter_by(alias_id=alias.id).all()
@@ -337,16 +353,41 @@ def build_allow_list_state(alias: Alias) -> dict:
         }
         for domain in sorted(trusted_set)
     ]
-    marked = [
-        {"domain": domain, "contacts": count}
-        for domain, count in sorted(domain_counts.items())
-        if domain not in trusted_set
+
+    marked_total = sum(1 for d in domain_counts if d not in trusted_set)
+
+    # domains guaranteed in the list: an explicit focus first, then the domains of the
+    # contacts visible on the page. Kept only if marked (present, not trusted), deduped.
+    visible_set = set(visible_ids or [])
+    pin_order = [focus_domain] if focus_domain else []
+    pin_order += [
+        c.registered_domain
+        for c in contacts
+        if c.id in visible_set and c.registered_domain
     ]
+    pinned = []
+    for d in pin_order:
+        if d in domain_counts and d not in trusted_set and d not in pinned:
+            pinned.append(d)
+
+    if marked_total <= MARKED_PANEL_LIMIT:
+        # few enough to list every marked domain (pinned first, then the rest)
+        rest = sorted(
+            d for d in domain_counts if d not in trusted_set and d not in pinned
+        )
+        marked_domains = pinned + rest
+    else:
+        # too many: list only the domains actionable from the current page; the
+        # remainder is reported via marked_total / has_more
+        marked_domains = pinned
+    marked = [{"domain": d, "contacts": domain_counts[d]} for d in marked_domains]
+
     return {
         "trusted": trusted,
         "marked": marked,
-        "contact_tags": build_contact_markers(alias, contacts),
-        "counts": {"trusted": len(trusted_set), "marked": len(marked)},
+        "marked_total": marked_total,
+        "has_more": marked_total > len(marked),
+        "counts": {"trusted": len(trusted_set), "marked": marked_total},
     }
 
 

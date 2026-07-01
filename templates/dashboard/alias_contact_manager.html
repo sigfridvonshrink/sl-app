@@ -345,30 +345,36 @@
 
     {% if sender_warnings_enabled %}
     // --- Unexpected-sender warnings: trusted-domain panel ---
-    // The server computes all state (decay tiers, trusted/marked grouping, contact
-    // tags). This script only paints what the server returns; no tier logic lives here.
+    // The server computes all state (decay tiers, trusted/marked grouping). This script
+    // only paints what the server returns; no tier logic lives here.
     const ALLOW_LIST_TOGGLE_URL = "/api/aliases/{{ alias.id }}/toggle_allow_domain";
     const ALLOW_LIST_STATE_URL = "/api/aliases/{{ alias.id }}/allow_list_state";
     const contactMarkers = {{ contact_markers | tojson }};
     let allowListState = null;
 
-    // The full trusted/marked domain panel aggregates across all of the alias's
-    // contacts, so it is fetched only the first time the panel is opened. A page
-    // load paints markers for the contacts on the page (contactMarkers) alone.
-    let panelPromise = null;
-    function loadPanel() {
-      if (!panelPromise) {
-        panelPromise = (async () => {
-          try {
-            let res = await fetch(ALLOW_LIST_STATE_URL, {
-              headers: { "Content-Type": "application/json", '{{HEADER_ALLOW_API_COOKIES}}': 'allow' }
-            });
-            if (res.ok) { renderPanel(await res.json()); }
-            else { panelPromise = null; }
-          } catch (e) { panelPromise = null; }
-        })();
-      }
-      return panelPromise;
+    // The trusted/marked domain panel aggregates across all of the alias's contacts,
+    // so it is fetched on demand, not on page load (the page paints markers for its
+    // visible contacts from contactMarkers). A plain open fetches once; opening from a
+    // contact's marker re-fetches with that domain pinned first.
+    let panelLoaded = false;
+    async function fetchPanel(focusDomain) {
+      let params = [];
+      if (focusDomain) params.push("focus_domain=" + encodeURIComponent(focusDomain));
+      let ids = visibleContactIds();
+      if (ids.length) params.push("visible_ids=" + ids.join(","));
+      let url = ALLOW_LIST_STATE_URL + (params.length ? "?" + params.join("&") : "");
+      try {
+        let res = await fetch(url, {
+          headers: { "Content-Type": "application/json", '{{HEADER_ALLOW_API_COOKIES}}': 'allow' }
+        });
+        if (res.ok) { renderPanel(await res.json()); panelLoaded = true; }
+      } catch (e) { /* leave the panel as-is on failure */ }
+    }
+
+    function visibleContactIds() {
+      return $(".sender-warning-tag").map(function () {
+        return $(this).data("contact");
+      }).get();
     }
 
     function chipEl(domain, trusted, count, orphan) {
@@ -434,8 +440,13 @@
 
       if (!(state.trusted || []).length)
         trustedBox.html('<span class="text-muted small">None yet — click a marked domain to trust it.</span>');
-      if (!(state.marked || []).length)
+      if (!(state.marked || []).length) {
         markedBox.html('<span class="text-muted small">All known domains trusted.</span>');
+      } else if (state.has_more) {
+        let more = (state.marked_total || 0) - state.marked.length;
+        markedBox.append($('<div class="text-muted small mt-1">')
+          .text(`+ ${more} more marked domain${more === 1 ? "" : "s"} not shown`));
+      }
 
       let c = state.counts || { trusted: 0, marked: 0 };
       let statusBox = $("#domainpanel-status").empty();
@@ -447,7 +458,6 @@
         statusBox.append('<div class="text-muted small">Trust a domain to start marking the others.</div>');
       }
 
-      renderContactTags(state.contact_tags || {});
       if (typeof $.fn.tooltip !== "undefined") $('#domainpanel [data-toggle="tooltip"]').tooltip();
     }
 
@@ -456,12 +466,13 @@
         let res = await fetch(ALLOW_LIST_TOGGLE_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json", '{{HEADER_ALLOW_API_COOKIES}}': 'allow' },
-          body: JSON.stringify({ domain: domain })
+          body: JSON.stringify({ domain: domain, visible_ids: visibleContactIds() })
         });
         if (res.ok) {
           let json = await res.json();
           toastr.success(`${json.domain} ${json.in_list ? "trusted" : "un-trusted"}`);
           renderPanel(json);
+          renderContactTags(json.contact_tags || {});
           let moved = $(`#domainpanel .sender-domain-chip[data-domain="${CSS.escape(json.domain)}"]`);
           moved.addClass("highlight-row");
           setTimeout(() => moved.removeClass("highlight-row"), 1000);
@@ -479,15 +490,17 @@
       toggleDomain($(this).data("domain"));
     });
 
-    // fetch the full panel the first time it is expanded
-    $("#domainpanel").on("show.bs.collapse", loadPanel);
+    // fetch the panel the first time it is expanded
+    $("#domainpanel").on("show.bs.collapse", function () {
+      if (!panelLoaded) fetchPanel();
+    });
 
-    // click a contact's marker -> open the panel and highlight that domain's chip
+    // click a contact's marker -> open the panel focused on that domain and highlight it
     $(document).on("click keypress", ".sender-warning-tag", async function (e) {
       if (e.type === "keypress" && e.which !== 13 && e.which !== 32) return;
       let domain = $(this).data("contact-domain");
       $("#domainpanel").collapse("show");
-      await loadPanel();
+      await fetchPanel(domain);
       let chip = $(`#domainpanel .sender-domain-chip[data-domain="${CSS.escape(domain)}"]`);
       if (chip.length) {
         chip[0].scrollIntoView({ behavior: "smooth", block: "center" });

@@ -36,6 +36,7 @@ from app.log import LOG
 from app.models import Alias, Contact, Mailbox, AliasDeleteReason
 from app.sender_warning_utils import (
     build_allow_list_state,
+    build_contact_markers,
     ui_tag_for_contact,
     is_valid_registered_domain,
 )
@@ -510,9 +511,10 @@ def toggle_contact(contact_id):
 def toggle_alias_allow_domain(alias_id):
     """toggle a sender domain in the alias's allow-list.
 
-    Body: {"domain": "<domain or email>"}. The domain is normalized to its registered
-    form. Returns the full allow-list panel state (trusted/marked groups, per-contact
-    tags, counts) so the client repaints from the server rather than deriving anything.
+    Body: {"domain": "<domain or email>", "visible_ids": [<contact ids on the page>]}.
+    The domain is normalized to its registered form. Returns the updated panel state
+    (with the toggled domain pinned) plus contact_tags for just the visible contacts,
+    so the client repaints from the server rather than deriving anything.
     """
     user = g.user
     alias: Optional[Alias] = Alias.get(alias_id)
@@ -537,17 +539,35 @@ def toggle_alias_allow_domain(alias_id):
     alias.set_sender_allow_domains(domains)
     Session.commit()
 
-    return jsonify(domain=domain, in_list=in_list, **build_allow_list_state(alias)), 200
+    # repaint markers only for the contacts currently visible on the page
+    visible_ids = [i for i in (data.get("visible_ids") or []) if isinstance(i, int)]
+    visible_contacts = (
+        Contact.filter(Contact.alias_id == alias.id, Contact.id.in_(visible_ids)).all()
+        if visible_ids
+        else []
+    )
+    return (
+        jsonify(
+            domain=domain,
+            in_list=in_list,
+            contact_tags=build_contact_markers(alias, visible_contacts),
+            **build_allow_list_state(
+                alias, focus_domain=domain, visible_ids=visible_ids
+            ),
+        ),
+        200,
+    )
 
 
 @api_bp.route("/aliases/<int:alias_id>/allow_list_state", methods=["GET"])
 @require_api_auth
 def get_alias_allow_list_state(alias_id):
-    """Full allow-list panel state (trusted/marked groups, per-contact tags, counts).
+    """Allow-list panel state (trusted/marked groups + counts, no per-contact tags).
 
     Loaded on demand when the dashboard panel is opened, so a normal contact-page
-    render only computes markers for the contacts on the page (build_contact_markers)
-    and never aggregates across all contacts of the alias.
+    render never aggregates across all contacts of the alias. The marked list is
+    capped; an optional ?focus_domain= pins that domain first so it is present even
+    past the cap (used when the panel is opened from a specific contact's marker).
     """
     user = g.user
     alias: Optional[Alias] = Alias.get(alias_id)
@@ -555,4 +575,24 @@ def get_alias_allow_list_state(alias_id):
     if not alias or alias.user_id != user.id:
         return jsonify(error="Forbidden"), 403
 
-    return jsonify(**build_allow_list_state(alias)), 200
+    focus = request.args.get("focus_domain")
+    focus_domain = None
+    if focus:
+        normalized = get_registered_domain(focus)
+        if normalized and is_valid_registered_domain(normalized):
+            focus_domain = normalized
+
+    visible_ids = [
+        int(x)
+        for x in (request.args.get("visible_ids") or "").split(",")
+        if x.isdigit()
+    ]
+
+    return (
+        jsonify(
+            **build_allow_list_state(
+                alias, focus_domain=focus_domain, visible_ids=visible_ids
+            )
+        ),
+        200,
+    )

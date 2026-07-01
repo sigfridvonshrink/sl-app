@@ -904,8 +904,94 @@ def test_get_allow_list_state(flask_client):
         headers={"Authentication": api_key.code},
     )
     assert r.status_code == 200
-    assert {"trusted", "marked", "contact_tags", "counts"} <= set(r.json.keys())
+    assert {"trusted", "marked", "marked_total", "has_more", "counts"} <= set(
+        r.json.keys()
+    )
+    assert "contact_tags" not in r.json  # panel no longer carries all-contact tags
     assert any(d["domain"] == "known.com" for d in r.json["marked"])
+
+
+def test_allow_list_state_lists_all_marked_within_limit(flask_client, monkeypatch):
+    from app import sender_warning_utils
+    from app.sender_warning_utils import build_allow_list_state
+
+    monkeypatch.setattr(sender_warning_utils, "MARKED_PANEL_LIMIT", 5)
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    for i, d in enumerate(["aaa.com", "bbb.com", "ccc.com"]):
+        Contact.create(
+            alias_id=alias.id,
+            website_email=f"x@{d}",
+            reply_email=f"r{i}@sl.io",
+            user_id=user.id,
+        )
+    alias.set_sender_allow_domains({"trusted.com"})  # arm the feature
+    Session.commit()
+
+    state = build_allow_list_state(alias)
+    assert {m["domain"] for m in state["marked"]} == {"aaa.com", "bbb.com", "ccc.com"}
+    assert state["marked_total"] == 3
+    assert state["has_more"] is False
+
+
+def test_allow_list_state_over_limit_lists_only_page_domains(flask_client, monkeypatch):
+    from app import sender_warning_utils
+    from app.sender_warning_utils import build_allow_list_state
+
+    monkeypatch.setattr(sender_warning_utils, "MARKED_PANEL_LIMIT", 2)
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    for i, d in enumerate(["aaa.com", "bbb.com", "ccc.com"]):
+        Contact.create(
+            alias_id=alias.id,
+            website_email=f"x@{d}",
+            reply_email=f"r{i}@sl.io",
+            user_id=user.id,
+        )
+    alias.set_sender_allow_domains({"trusted.com"})  # arm the feature
+    Session.commit()
+
+    # over the limit, with no page context, nothing is listed but the total is reported
+    state = build_allow_list_state(alias)
+    assert state["marked"] == []
+    assert state["marked_total"] == 3
+    assert state["has_more"] is True
+
+    # a focus domain is listed even over the limit
+    focused = build_allow_list_state(alias, focus_domain="ccc.com")
+    assert [m["domain"] for m in focused["marked"]] == ["ccc.com"]
+
+
+def test_toggle_allow_domain_returns_visible_tags_only(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    c1 = Contact.create(
+        alias_id=alias.id,
+        website_email="a@known.com",
+        reply_email="r1@sl.io",
+        user_id=user.id,
+        flush=True,
+    )
+    Contact.create(
+        alias_id=alias.id,
+        website_email="b@other.com",
+        reply_email="r2@sl.io",
+        user_id=user.id,
+    )
+    Session.commit()
+
+    r = flask_client.post(
+        url_for("api.toggle_alias_allow_domain", alias_id=alias.id),
+        headers={"Authentication": api_key.code},
+        json={"domain": "known.com", "visible_ids": [c1.id]},
+    )
+    assert r.status_code == 200
+    # only the visible contact's tag is returned (the second contact is excluded)
+    assert set(r.json["contact_tags"].keys()) == {str(c1.id)}
+    assert any(d["domain"] == "known.com" for d in r.json["trusted"])
 
 
 def test_get_allow_list_state_forbidden_for_other_user(flask_client):
@@ -918,3 +1004,29 @@ def test_get_allow_list_state_forbidden_for_other_user(flask_client):
         headers={"Authentication": api_key.code},
     )
     assert r.status_code == 403
+
+
+def test_allow_list_state_guarantees_visible_domains(flask_client, monkeypatch):
+    from app import sender_warning_utils
+    from app.sender_warning_utils import build_allow_list_state
+
+    monkeypatch.setattr(sender_warning_utils, "MARKED_PANEL_LIMIT", 1)
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    contacts = {}
+    for i, d in enumerate(["aaa.com", "bbb.com", "ccc.com"]):
+        contacts[d] = Contact.create(
+            alias_id=alias.id,
+            website_email=f"x@{d}",
+            reply_email=f"r{i}@sl.io",
+            user_id=user.id,
+            flush=True,
+        )
+    alias.set_sender_allow_domains({"trusted.com"})
+    Session.commit()
+
+    # cap is 1, but a visible contact's domain is guaranteed present past the cap
+    state = build_allow_list_state(alias, visible_ids=[contacts["ccc.com"].id])
+    domains = [m["domain"] for m in state["marked"]]
+    assert "ccc.com" in domains
