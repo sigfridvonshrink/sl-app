@@ -24,6 +24,7 @@ from app.errors import (
 )
 from app.log import LOG
 from app.models import Alias, Contact, EmailLog
+from app.sender_warning_utils import build_allow_list_state, get_decay_config
 from app.utils import CSRFValidationForm
 
 
@@ -307,8 +308,6 @@ def alias_contact_manager(alias_id):
     sender_warnings_enabled = current_user.sender_warnings_enabled
     allow_list_state = None
     if sender_warnings_enabled:
-        from app.sender_warning_utils import build_allow_list_state
-
         allow_list_state = build_allow_list_state(alias)
 
     return render_template(
@@ -325,4 +324,5 @@ def alias_contact_manager(alias_id):
         csrf_form=csrf_form,
         sender_warnings_enabled=sender_warnings_enabled,
         allow_list_state=allow_list_state,
+        decay=get_decay_config(current_user),
     )

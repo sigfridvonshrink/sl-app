@@ -233,6 +233,17 @@ def should_auto_trust(contact: Contact, email_log_count: int, user=None) -> bool
     )
 
 
+def ui_tag_for_contact(contact: Contact) -> str:
+    """Dashboard mirror of the marker the mailbox would see for this sender.
+
+    Empty unless the feature is on and the alias has an active allow-list. For
+    rendering many contacts at once, prefer build_allow_list_state, which computes
+    all markers from a single batched message count.
+    """
+    emails_count = EmailLog.filter_by(contact_id=contact.id).count()
+    return marker_for_contact(contact, emails_count, contact.alias.user)
+
+
 def build_allow_list_state(alias: Alias) -> dict:
     """Per-alias panel state for the dashboard and the toggle endpoint.
 
