@@ -347,7 +347,28 @@
     // The server computes all state (decay tiers, trusted/marked grouping, contact
     // tags). This script only paints what the server returns; no tier logic lives here.
     const ALLOW_LIST_TOGGLE_URL = "/api/aliases/{{ alias.id }}/toggle_allow_domain";
-    let allowListState = {{ allow_list_state | tojson }};
+    const ALLOW_LIST_STATE_URL = "/api/aliases/{{ alias.id }}/allow_list_state";
+    const contactMarkers = {{ contact_markers | tojson }};
+    let allowListState = null;
+
+    // The full trusted/marked domain panel aggregates across all of the alias's
+    // contacts, so it is fetched only the first time the panel is opened. A page
+    // load paints markers for the contacts on the page (contactMarkers) alone.
+    let panelPromise = null;
+    function loadPanel() {
+      if (!panelPromise) {
+        panelPromise = (async () => {
+          try {
+            let res = await fetch(ALLOW_LIST_STATE_URL, {
+              headers: { "Content-Type": "application/json", '{{HEADER_ALLOW_API_COOKIES}}': 'allow' }
+            });
+            if (res.ok) { renderPanel(await res.json()); }
+            else { panelPromise = null; }
+          } catch (e) { panelPromise = null; }
+        })();
+      }
+      return panelPromise;
+    }
 
     function chipEl(domain, trusted, count, orphan) {
       // build via jQuery: the domain is set as text / attribute, never interpolated
@@ -430,22 +451,24 @@
       toggleDomain($(this).data("domain"));
     });
 
+    // fetch the full panel the first time it is expanded
+    $("#domainpanel").on("show.bs.collapse", loadPanel);
+
     // click a contact's marker -> open the panel and highlight that domain's chip
-    $(document).on("click keypress", ".sender-warning-tag", function (e) {
+    $(document).on("click keypress", ".sender-warning-tag", async function (e) {
       if (e.type === "keypress" && e.which !== 13 && e.which !== 32) return;
       let domain = $(this).data("contact-domain");
       $("#domainpanel").collapse("show");
-      setTimeout(() => {
-        let chip = $(`#domainpanel .sender-domain-chip[data-domain="${CSS.escape(domain)}"]`);
-        if (chip.length) {
-          chip[0].scrollIntoView({ behavior: "smooth", block: "center" });
-          chip.addClass("highlight-row");
-          setTimeout(() => chip.removeClass("highlight-row"), 1200);
-        }
-      }, 350);
+      await loadPanel();
+      let chip = $(`#domainpanel .sender-domain-chip[data-domain="${CSS.escape(domain)}"]`);
+      if (chip.length) {
+        chip[0].scrollIntoView({ behavior: "smooth", block: "center" });
+        chip.addClass("highlight-row");
+        setTimeout(() => chip.removeClass("highlight-row"), 1200);
+      }
     });
 
-    $(function () { if (allowListState) renderPanel(allowListState); });
+    $(function () { renderContactTags(contactMarkers); });
     {% endif %}
   </script>
 {% endblock %}

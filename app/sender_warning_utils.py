@@ -273,6 +273,28 @@ def ui_tag_for_contact(contact: Contact) -> str:
     return marker_for_contact(contact, emails_count, contact.alias.user)
 
 
+def build_contact_markers(alias: Alias, contacts) -> dict:
+    """Per-contact dashboard markers for a specific set of contacts.
+
+    Used to render only the contacts on the current page, so a contact-page load
+    never aggregates markers across every contact of the alias. Message counts are
+    fetched in one grouped query bounded to the given contacts.
+    """
+    if not contacts:
+        return {}
+    ids = [c.id for c in contacts]
+    counts = dict(
+        Session.query(EmailLog.contact_id, func.count(EmailLog.id))
+        .filter(EmailLog.contact_id.in_(ids))
+        .group_by(EmailLog.contact_id)
+        .all()
+    )
+    return {
+        str(c.id): marker_for_contact(c, counts.get(c.id, 0), alias.user)
+        for c in contacts
+    }
+
+
 def build_allow_list_state(alias: Alias) -> dict:
     """Per-alias panel state for the dashboard and the toggle endpoint.
 
@@ -282,13 +304,6 @@ def build_allow_list_state(alias: Alias) -> dict:
     """
     trusted_set = alias.get_sender_allow_domains()
     contacts = Contact.filter_by(alias_id=alias.id).all()
-
-    counts = dict(
-        Session.query(EmailLog.contact_id, func.count(EmailLog.id))
-        .filter(EmailLog.contact_id.in_([c.id for c in contacts] or [0]))
-        .group_by(EmailLog.contact_id)
-        .all()
-    )
 
     domain_counts: Counter = Counter()
     for contact in contacts:
@@ -309,17 +324,10 @@ def build_allow_list_state(alias: Alias) -> dict:
         for domain, count in sorted(domain_counts.items())
         if domain not in trusted_set
     ]
-    contact_tags = {
-        str(contact.id): marker_for_contact(
-            contact, counts.get(contact.id, 0), alias.user
-        )
-        for contact in contacts
-    }
-
     return {
         "trusted": trusted,
         "marked": marked,
-        "contact_tags": contact_tags,
+        "contact_tags": build_contact_markers(alias, contacts),
         "counts": {"trusted": len(trusted_set), "marked": len(marked)},
     }
 

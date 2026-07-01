@@ -318,3 +318,18 @@ def test_ui_trust_matches_forward_decision_on_website_email():
     alias.set_sender_allow_domains({"example.com"})
     Session.commit()
     assert contact.domain_in_allow_list is False
+
+
+def test_build_contact_markers_is_bounded_to_given_contacts():
+    from app.sender_warning_utils import build_contact_markers
+
+    user = create_new_user()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    c1 = create_contact("a@x-domain.com", alias).contact
+    create_contact("b@y-domain.com", alias).contact  # second contact, not requested
+
+    markers = build_contact_markers(alias, [c1])
+    assert set(markers.keys()) == {str(c1.id)}  # only the given contact
+    assert build_contact_markers(alias, []) == {}
