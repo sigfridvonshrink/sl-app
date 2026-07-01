@@ -20,14 +20,13 @@
         {% if sender_warnings_enabled %}
 
           <a id="domainpanel-link"
-             class="ml-3 text-info"
-             style="font-size: 12px"
+             class="btn btn-outline-info btn-sm ml-3"
              data-toggle="collapse"
              href="#domainpanel"
              role="button"
              aria-expanded="false"
              aria-controls="domainpanel">
-            trusted domains <i class="fe fe-chevrons-down"></i>
+            <i class="fe fe-shield"></i> Manage trusted domains
           </a>
         {% endif %}
       </h1>
@@ -84,8 +83,7 @@
             </div>
             <div id="domainpanel-marked" class="mb-3"></div>
             <hr class="my-2" />
-            <a class="text-info"
-               style="font-size: 12px"
+            <a class="text-info small"
                data-toggle="collapse"
                href="#domainpanel-help"
                role="button"
@@ -98,6 +96,7 @@
               sender becomes familiar: <span class="mx-1">{{ decay.tiers[0].marker }} new</span> ·
               <span class="mx-1">{{ decay.tiers[1].marker }} familiar</span> ·
               <span class="mx-1">{{ decay.floor_marker }} established</span>.
+              A trusted sender shows <span class="mx-1">{{ trusted_marker }} trusted</span>.
               Click a domain to trust or un-trust it.
             </div>
           </div>
@@ -164,13 +163,13 @@
 
                 {# marker filled in by JS (renderContactTags) from the server-computed
                    panel state, so the page avoids a per-contact query on load #}
-                <span class="sender-marker-label-{{ contact.id }} ml-1 sender-warning-tag"
+                <span class="sender-marker-label-{{ contact.id }} ml-1 sender-warning-tag cursor"
                       data-contact="{{ contact.id }}"
                       data-contact-domain="{{ contact.registered_domain }}"
                       role="button"
                       tabindex="0"
-                      title="manage trusted domains"
-                      style="cursor: pointer"></span>
+                      aria-label="manage trusted domains"
+                      title="manage trusted domains"></span>
               {% endif %}
               {% if contact.pgp_finger_print %}
 
@@ -408,11 +407,10 @@
     function renderMarker($el, state) {
       let info = markerInfo(state);
       $el.text(info.glyph);
-      if (info.label) {
-        $el.attr("title", info.label + " — click to manage trusted domains");
-      } else {
-        $el.removeAttr("title");
-      }
+      let tip = info.label
+        ? info.label + " — click to manage trusted domains"
+        : "Manage trusted domains";
+      $el.attr("title", tip).attr("aria-label", tip);
     }
 
     function renderContactTags(tags) {
