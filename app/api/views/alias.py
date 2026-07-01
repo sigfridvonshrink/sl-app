@@ -21,7 +21,6 @@ from app.api.serializer import (
 )
 from app.contact_utils import (
     contact_toggle_block,
-    perform_contact_deletion,
 )
 from app.dashboard.views.alias_contact_manager import create_contact
 from app.dashboard.views.alias_log import get_alias_log
@@ -465,7 +464,13 @@ def delete_contact(contact_id):
     if not contact or contact.alias.user_id != user.id:
         return jsonify(error="Forbidden"), 403
 
-    perform_contact_deletion(contact)
+    emit_alias_audit_log(
+        alias=contact.alias,
+        action=AliasAuditLogAction.DeleteContact,
+        message=f"Deleted contact {contact_id} ({contact.email})",
+    )
+    Contact.delete(contact_id)
+    Session.commit()
 
     return jsonify(deleted=True), 200
 

@@ -180,24 +180,3 @@ def contact_toggle_block(contact: Contact) -> Contact:
     )
     Session.commit()
     LOG.i(f"Updated contact {contact} blocked state to {contact.block_forward}")
-
-
-def perform_contact_deletion(contact: Contact):
-    """Delete a contact (reverse-alias).
-
-    A trusted domain whose last contact is deleted intentionally becomes a visible
-    "orphan" in the allow-list panel rather than being silently removed: a domain may
-    be trusted on purpose ahead of any contact, and the panel makes orphans easy to
-    prune. See docs/sender-warnings-spec.md.
-    """
-    alias = contact.alias
-    contact_id = contact.id
-    contact_email = contact.email
-
-    emit_alias_audit_log(
-        alias=alias,
-        action=AliasAuditLogAction.DeleteContact,
-        message=f"Deleted contact {contact_id} ({contact_email})",
-    )
-    Contact.delete(contact_id)
-    Session.commit()
