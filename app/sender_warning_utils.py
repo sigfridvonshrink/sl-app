@@ -236,7 +236,7 @@ def should_auto_trust(contact: Contact, email_log_count: int, user=None) -> bool
 def build_allow_list_state(alias: Alias) -> dict:
     """Per-alias panel state for the dashboard and the toggle endpoint.
 
-    Returns the trusted/flagged domain groups (alphabetical, with contact counts and
+    Returns the trusted/marked domain groups (alphabetical, with contact counts and
     orphan flags), the per-contact dashboard markers, and the group counts. Message
     counts are fetched in a single grouped query to avoid a per-contact lookup.
     """
@@ -264,7 +264,7 @@ def build_allow_list_state(alias: Alias) -> dict:
         }
         for domain in sorted(trusted_set)
     ]
-    flagged = [
+    marked = [
         {"domain": domain, "contacts": count}
         for domain, count in sorted(domain_counts.items())
         if domain not in trusted_set
@@ -278,9 +278,9 @@ def build_allow_list_state(alias: Alias) -> dict:
 
     return {
         "trusted": trusted,
-        "flagged": flagged,
+        "marked": marked,
         "contact_tags": contact_tags,
-        "counts": {"trusted": len(trusted_set), "flagged": len(flagged)},
+        "counts": {"trusted": len(trusted_set), "marked": len(marked)},
     }
 
 

@@ -507,7 +507,7 @@ def toggle_alias_allow_domain(alias_id):
     """toggle a sender domain in the alias's allow-list.
 
     Body: {"domain": "<domain or email>"}. The domain is normalized to its registered
-    form. Returns the full allow-list panel state (trusted/flagged groups, per-contact
+    form. Returns the full allow-list panel state (trusted/marked groups, per-contact
     tags, counts) so the client repaints from the server rather than deriving anything.
     """
     user = g.user

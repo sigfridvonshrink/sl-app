@@ -837,15 +837,15 @@ def test_toggle_allow_domain(flask_client):
     assert r.json["in_list"] is True
     assert any(d["domain"] == "known.com" for d in r.json["trusted"])
     assert r.json["counts"]["trusted"] == 1
-    assert r.json["counts"]["flagged"] == 0
+    assert r.json["counts"]["marked"] == 0
 
-    # toggle again -> removed; domain returns to the flagged group (contact still exists)
+    # toggle again -> removed; domain returns to the marked group (contact still exists)
     r = flask_client.post(
         url, headers={"Authentication": api_key.code}, json={"domain": "known.com"}
     )
     assert r.status_code == 200
     assert r.json["in_list"] is False
-    assert any(d["domain"] == "known.com" for d in r.json["flagged"])
+    assert any(d["domain"] == "known.com" for d in r.json["marked"])
     assert r.json["counts"]["trusted"] == 0
 
 
