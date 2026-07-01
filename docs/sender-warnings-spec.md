@@ -55,7 +55,7 @@ Persisted, single source of truth:
 User-level flags (bits on `User.flags`, no migration needed):
 - `FLAG_SENDER_WARNINGS` (master switch) — **NEW**. Off by default. Gates everything,
   UI and email.
-- `FLAG_AUTO_WHITELIST_ON_FIRST_CONTACT` — auto-trust the first sender to a new alias.
+- `FLAG_AUTO_TRUST_FIRST_CONTACT` — auto-trust the first sender to a new alias.
 - `FLAG_MARKER_IN_SUBJECT` — place the marker in Subject (else in the From display name).
 
 User-level decay config (one additive nullable JSON column — the only schema change):
@@ -85,7 +85,7 @@ Derived, never stored:
 ```
 FLAG_SENDER_WARNINGS  (user master, default OFF)
   └─ when ON ─ per-alias sender_allow_list (0..N trusted domains)
-       ├─ FLAG_AUTO_WHITELIST_ON_FIRST_CONTACT  (sub-option)
+       ├─ FLAG_AUTO_TRUST_FIRST_CONTACT  (sub-option)
        └─ FLAG_MARKER_IN_SUBJECT                (sub-option)
 ```
 
