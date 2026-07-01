@@ -1261,12 +1261,14 @@ def handle_reply(
 
     # strip a previously-inserted unexpected-sender marker so it does not
     # echo back out on reply. Matches the user's currently-configured marker glyphs.
-    orig_subject = msg[headers.SUBJECT]
-    if orig_subject:
-        orig_subject_str = get_header_unicode(orig_subject) or ""
-        new_subject_str = strip_marker_from_subject(orig_subject_str, user)
-        if new_subject_str != orig_subject_str:
-            add_or_replace_header(msg, "Subject", new_subject_str)
+    # Gated by the feature flag so replies are untouched for users who have it off.
+    if user.sender_warnings_enabled:
+        orig_subject = msg[headers.SUBJECT]
+        if orig_subject:
+            orig_subject_str = get_header_unicode(orig_subject) or ""
+            new_subject_str = strip_marker_from_subject(orig_subject_str, user)
+            if new_subject_str != orig_subject_str:
+                add_or_replace_header(msg, "Subject", new_subject_str)
 
     orig_to = msg[headers.TO]
     orig_cc = msg[headers.CC]

@@ -90,7 +90,16 @@ def create_contact(
     if contact is not None:
         return __update_contact_if_needed(contact, name, mail_from)
 
-    is_first_contact = Contact.filter_by(alias_id=alias.id).first() is None
+    # Must be computed before the contact is created below, otherwise the
+    # query would also match the new row. Gated by the feature flags so
+    # non-users never run it — the cheap checks short-circuit the query.
+    is_first_contact = (
+        email != ""
+        and not alias.sender_allow_list
+        and alias.user.sender_warnings_enabled
+        and alias.user.auto_trust_first_contact
+        and Contact.filter_by(alias_id=alias.id).first() is None
+    )
 
     # Create the contact
     reply_email = generate_reply_email(email, alias)
@@ -125,13 +134,7 @@ def create_contact(
             f"Created contact {contact} for alias {alias} with email {email} invalid_email={is_invalid_email}"
         )
 
-        if (
-            is_first_contact
-            and not alias.sender_allow_list
-            and not is_invalid_email
-            and alias.user.sender_warnings_enabled
-            and alias.user.auto_trust_first_contact
-        ):
+        if is_first_contact:
             email_to_extract = (
                 email
                 if email
