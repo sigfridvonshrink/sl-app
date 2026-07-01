@@ -266,3 +266,51 @@ def test_validate_decay_config_rejects_out_of_bounds():
                 "auto_trust": None,
             }
         )
+
+
+# strip_marker_from_subject: robust, position-independent round trips
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "Hi",  # single word -> appended, no separator
+        "Hello world",  # marker lands early (old range would miss)
+        "Meeting notes for the team today",
+        "A B C D E F G",  # marker lands mid, many tokens
+        "x y",  # very short, marker at a tiny index
+    ],
+)
+@pytest.mark.parametrize("prefix", ["", "Re: ", "Fwd: ", "Re: Re: ", "RE: Fw: "])
+def test_strip_round_trip_default_markers(subject, prefix):
+    user = _user(None)
+    tag = get_configured_markers(user)[0]  # longest default marker
+    incoming = prefix + insert_marker_in_subject(subject, tag)
+    stripped = strip_marker_from_subject(incoming, user)
+    assert stripped == prefix + subject
+    assert tag not in stripped
+
+
+def test_strip_round_trip_custom_marker():
+    cfg = {
+        "tiers": [
+            {"marker": "NEW", "max_days": 24, "max_count": 2},
+            {"marker": "MID", "max_days": 192, "max_count": 5},
+        ],
+        "floor_marker": "OLD",
+        "auto_trust": None,
+    }
+    user = _user(cfg)
+    for tag in ("NEW", "MID", "OLD"):
+        incoming = "Re: " + insert_marker_in_subject("quarterly report", tag)
+        assert strip_marker_from_subject(incoming, user) == "Re: quarterly report"
+
+
+def test_strip_leaves_unrelated_content_untouched():
+    user = _user(None)
+    tag = get_configured_markers(user)[0]
+    # no marker present -> unchanged
+    assert strip_marker_from_subject("Re: important meeting", user) == (
+        "Re: important meeting"
+    )
+    # glyph embedded in user content (not the insertion shape) -> unchanged
+    embedded = f"warning{tag}sign is fine"
+    assert strip_marker_from_subject(embedded, user) == embedded
