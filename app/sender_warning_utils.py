@@ -15,6 +15,7 @@ logic in templates or JavaScript. See docs/sender-warnings-spec.md.
 """
 
 import copy
+import re
 from collections import Counter
 from email.header import Header
 from email.message import Message
@@ -231,6 +232,34 @@ def should_auto_trust(contact: Contact, email_log_count: int, user=None) -> bool
         _contact_age_days(contact) >= auto_trust["min_days"]
         and email_log_count >= auto_trust["min_count"]
     )
+
+
+_DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def is_valid_registered_domain(domain: str) -> bool:
+    """Validate a registered domain before it is stored or returned.
+
+    tldextract normalizes input but does not reject it, so this guards the API
+    boundary against malformed or unsafe values (HTML metacharacters, whitespace,
+    control characters, bad structure).
+
+    Accepts any legal hostname, including internationalized (IDN) domains: the
+    value is converted to its ASCII (punycode) form via IDNA, then checked against
+    the letter-digit-hyphen rule (RFC 952 / RFC 1123) — dotted labels of 1-63
+    chars, each starting and ending alphanumeric, total <= 253. IDNA conversion
+    rejects illegal labels (bad characters, empty, over-length) on its own; the
+    LDH check is the explicit final gate.
+    """
+    if not domain or "." not in domain:
+        return False
+    try:
+        ascii_domain = domain.encode("idna").decode("ascii")
+    except (UnicodeError, ValueError):
+        return False
+    if len(ascii_domain) > 253:
+        return False
+    return all(_DOMAIN_LABEL_RE.match(label) for label in ascii_domain.split("."))
 
 
 def ui_tag_for_contact(contact: Contact) -> str:

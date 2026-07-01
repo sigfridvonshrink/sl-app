@@ -16,6 +16,7 @@ from app.sender_warning_utils import (
     validate_decay_config,
     get_configured_markers,
     strip_marker_from_subject,
+    is_valid_registered_domain,
     DecayConfigError,
     DEFAULT_DECAY,
 )
@@ -314,3 +315,41 @@ def test_strip_leaves_unrelated_content_untouched():
     # glyph embedded in user content (not the insertion shape) -> unchanged
     embedded = f"warning{tag}sign is fine"
     assert strip_marker_from_subject(embedded, user) == embedded
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "good.com",
+        "sub.good.com",
+        "a-b.co.uk",
+        "x1.example.io",
+        "9and.com",  # RFC 1123 allows a leading digit
+        "xn--mnchen-3ya.de",  # IDN in punycode form
+        "münchen.de",  # IDN in unicode form
+        "例え.jp",  # non-Latin IDN
+        "россия.рф",  # Cyrillic IDN
+    ],
+)
+def test_is_valid_registered_domain_accepts(domain):
+    assert is_valid_registered_domain(domain)
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "",
+        "nodot",
+        "a..b.com",
+        "-bad.com",
+        "bad-.com",
+        'a"><script>.com',  # tldextract passes this through unchanged
+        "a b.com",
+        'evil".com',
+        "javascript",
+        "x" * 300 + ".com",
+        "a_b.com",  # underscore is not legal in a hostname
+    ],
+)
+def test_is_valid_registered_domain_rejects(domain):
+    assert not is_valid_registered_domain(domain)
