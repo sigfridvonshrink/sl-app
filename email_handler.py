@@ -650,9 +650,7 @@ def handle_forward(envelope, msg: Message, rcpt_to: str) -> List[Tuple[bool, str
     # on an empty list, so the upstream forward path is unchanged when disabled).
     sender_not_trusted = False
     if alias.user.sender_warnings_enabled:
-        email_to_check = (
-            contact.website_email if contact.website_email else envelope.mail_from
-        )
+        email_to_check = contact.sender_domain_source or envelope.mail_from
         if not alias.is_sender_allowed(email_to_check):
             sender_not_trusted = True
             LOG.d("Sender %s is not in allow list for alias %s", email_to_check, alias)
