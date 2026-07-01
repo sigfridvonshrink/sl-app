@@ -83,7 +83,7 @@
             <div class="mb-1">
               <strong>Marked domains</strong> <span class="text-muted small">(their emails get a marker)</span>
             </div>
-            <div id="domainpanel-flagged" class="mb-3"></div>
+            <div id="domainpanel-marked" class="mb-3"></div>
             <hr class="my-2" />
             <a class="text-info"
                style="font-size: 12px"
@@ -345,7 +345,7 @@
 
     {% if sender_warnings_enabled %}
     // --- Unexpected-sender warnings: trusted-domain panel ---
-    // The server computes all state (decay tiers, trusted/flagged grouping, contact
+    // The server computes all state (decay tiers, trusted/marked grouping, contact
     // tags). This script only paints what the server returns; no tier logic lives here.
     const ALLOW_LIST_TOGGLE_URL = "/api/aliases/{{ alias.id }}/toggle_allow_domain";
     let allowListState = {{ allow_list_state | tojson }};
@@ -377,23 +377,23 @@
       // clicked chip is orphaned in <body> when the chip is replaced below.
       if (typeof $.fn.tooltip !== "undefined") $('#domainpanel [data-toggle="tooltip"]').tooltip("dispose");
       let trustedBox = $("#domainpanel-trusted").empty();
-      let flaggedBox = $("#domainpanel-flagged").empty();
+      let markedBox = $("#domainpanel-marked").empty();
 
       (state.trusted || []).forEach(d =>
         trustedBox.append(chipEl(d.domain, true, d.contacts, d.orphan)));
-      (state.flagged || []).forEach(d =>
-        flaggedBox.append(chipEl(d.domain, false, d.contacts, false)));
+      (state.marked || []).forEach(d =>
+        markedBox.append(chipEl(d.domain, false, d.contacts, false)));
 
       if (!(state.trusted || []).length)
         trustedBox.html('<span class="text-muted small">None yet — click a marked domain to trust it.</span>');
-      if (!(state.flagged || []).length)
-        flaggedBox.html('<span class="text-muted small">All known domains trusted.</span>');
+      if (!(state.marked || []).length)
+        markedBox.html('<span class="text-muted small">All known domains trusted.</span>');
 
-      let c = state.counts || { trusted: 0, flagged: 0 };
+      let c = state.counts || { trusted: 0, marked: 0 };
       let statusBox = $("#domainpanel-status").empty();
       if (c.trusted) {
         statusBox.append('<div class="font-weight-bold">Warnings active for this alias</div>');
-        statusBox.append($('<div class="text-muted small">').text(`${c.trusted} trusted · ${c.flagged} marked`));
+        statusBox.append($('<div class="text-muted small">').text(`${c.trusted} trusted · ${c.marked} marked`));
       } else {
         statusBox.append('<div class="font-weight-bold">Warnings off for this alias</div>');
         statusBox.append('<div class="text-muted small">Trust a domain to start marking the others.</div>');

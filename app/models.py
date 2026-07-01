@@ -1642,7 +1642,7 @@ class Alias(Base, ModelMixin):
     # the name to use when user replies/sends from alias
     name = sa.Column(sa.String(128), nullable=True, default=None)
 
-    # optional list of domains that must match the sender email. if not matching, email is flagged with a warning marker
+    # optional list of domains that must match the sender email. if not matching, email is marked with a warning marker
     sender_allow_list = sa.Column(sa.JSON(), nullable=True, default=None)
 
     enabled = sa.Column(sa.Boolean(), default=True, nullable=False)
