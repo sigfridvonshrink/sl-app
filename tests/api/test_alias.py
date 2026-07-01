@@ -872,3 +872,17 @@ def test_toggle_allow_domain_forbidden_for_other_user(flask_client):
         json={"domain": "known.com"},
     )
     assert r.status_code == 403
+
+
+def test_toggle_allow_domain_rejects_malformed(flask_client):
+    user, api_key = get_new_user_and_api_key()
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    url = url_for("api.toggle_alias_allow_domain", alias_id=alias.id)
+    for bad in ['a"><script>.com', "no dot", "-bad.com", "javascript:alert(1)"]:
+        r = flask_client.post(
+            url, headers={"Authentication": api_key.code}, json={"domain": bad}
+        )
+        assert r.status_code == 400, bad
+    Session.refresh(alias)
+    assert not alias.sender_allow_list

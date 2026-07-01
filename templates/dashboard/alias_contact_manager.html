@@ -350,18 +350,18 @@
     let allowListState = {{ allow_list_state | tojson }};
 
     function chipEl(domain, trusted, count, orphan) {
-      let cls = trusted ? "badge-success" : "badge-light";
-      let icon = trusted ? '<i class="fe fe-check"></i> ' : "";
+      // build via jQuery: the domain is set as text / attribute, never interpolated
+      // into markup, so an unexpected value cannot break out of the attribute or tag.
       let countTxt = (count && count > 1) ? ` ·${count}` : "";
-      let dim = orphan ? ' style="opacity:.6;"' : "";
-      let stale = orphan ? ' <span class="text-muted">(stale)</span>' : "";
-      let safeDomain = $("<i>").text(domain).html();
-      return $(
-        `<span class="badge badge-pill ${cls} mr-1 mb-1 sender-domain-chip" ` +
-        `data-domain="${domain}" role="button" tabindex="0"${dim} ` +
-        `data-toggle="tooltip" title="${trusted ? 'Trusted — click to untrust' : 'Marked — click to trust'}">` +
-        `${icon}${safeDomain}${countTxt}${stale}</span>`
-      );
+      let $chip = $('<span class="badge badge-pill mr-1 mb-1 sender-domain-chip" role="button" tabindex="0" data-toggle="tooltip">')
+        .addClass(trusted ? "badge-success" : "badge-light")
+        .attr("data-domain", domain)
+        .attr("title", trusted ? "Trusted — click to untrust" : "Marked — click to trust");
+      if (orphan) $chip.css("opacity", ".6");
+      if (trusted) $chip.append('<i class="fe fe-check"></i> ');
+      $chip.append(document.createTextNode(domain + countTxt));
+      if (orphan) $chip.append($('<span class="text-muted">').text(" (stale)"));
+      return $chip;
     }
 
     function renderContactTags(tags) {
@@ -413,7 +413,7 @@
           let json = await res.json();
           toastr.success(`${json.domain} ${json.in_list ? "trusted" : "un-trusted"}`);
           renderPanel(json);
-          let moved = $(`#domainpanel .sender-domain-chip[data-domain="${json.domain}"]`);
+          let moved = $(`#domainpanel .sender-domain-chip[data-domain="${CSS.escape(json.domain)}"]`);
           moved.addClass("highlight-row");
           setTimeout(() => moved.removeClass("highlight-row"), 1000);
         } else {
@@ -436,7 +436,7 @@
       let domain = $(this).data("contact-domain");
       $("#domainpanel").collapse("show");
       setTimeout(() => {
-        let chip = $(`#domainpanel .sender-domain-chip[data-domain="${domain}"]`);
+        let chip = $(`#domainpanel .sender-domain-chip[data-domain="${CSS.escape(domain)}"]`);
         if (chip.length) {
           chip[0].scrollIntoView({ behavior: "smooth", block: "center" });
           chip.addClass("highlight-row");

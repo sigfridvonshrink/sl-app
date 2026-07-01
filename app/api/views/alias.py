@@ -34,7 +34,11 @@ from app.errors import (
 from app.extensions import limiter
 from app.log import LOG
 from app.models import Alias, Contact, Mailbox, AliasDeleteReason
-from app.sender_warning_utils import build_allow_list_state, ui_tag_for_contact
+from app.sender_warning_utils import (
+    build_allow_list_state,
+    ui_tag_for_contact,
+    is_valid_registered_domain,
+)
 from app.utils import get_registered_domain
 
 
@@ -519,8 +523,8 @@ def toggle_alias_allow_domain(alias_id):
     data = request.get_json(silent=True) or {}
     raw_domain = (data.get("domain") or "").strip()
     domain = get_registered_domain(raw_domain) if raw_domain else ""
-    if not domain:
-        return jsonify(error="domain is required"), 400
+    if not domain or not is_valid_registered_domain(domain):
+        return jsonify(error="invalid domain"), 400
 
     domains = alias.get_sender_allow_domains()
     if domain in domains:
