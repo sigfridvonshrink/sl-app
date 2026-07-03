@@ -40,6 +40,53 @@ def __update_contact_if_needed(
     return ContactCreateResult(contact, created=False, error=None)
 
 
+def _maybe_auto_trust_first_contact(alias_id: int, contact_id: int, email: str) -> None:
+    """Seed an alias's sender allow-list from its first contact's domain, race-safely.
+
+    Only reached for the auto-trust-first-contact feature (the caller gates on the
+    flags). Serialises on the alias row so that when several first messages for a
+    brand-new alias arrive concurrently, exactly one of them seeds the allow-list and
+    no writer's trusted domain is lost: the first to take the lock -- seeing an empty
+    list and no earlier contact -- writes its domain; any later writer sees the list
+    already populated and leaves it untouched.
+    """
+    domain = email.split("@")[-1] if "@" in email else ""
+    if not domain:
+        return
+
+    # Exclusive alias row lock held until this function commits; concurrent callers
+    # queue here, making the read-and-write below atomic across transactions. Uses the
+    # raw-SQL helper (a plain FOR UPDATE on the ORM query fails because Alias eager-joins
+    # mailboxes and FOR UPDATE cannot apply to an outer join). populate_existing() then
+    # refreshes the in-session copy so the allow-list check reflects committed state.
+    Alias.lock_for_update(alias_id)
+    db_alias = (
+        Session.query(Alias).populate_existing().filter(Alias.id == alias_id).first()
+    )
+    if db_alias is None:
+        Session.commit()
+        return
+
+    # Already seeded, possibly by a concurrent first sender -> never overwrite.
+    if db_alias.sender_allow_list:
+        Session.commit()
+        return
+
+    # Only the genuine first contact seeds the list: no contact predates this one.
+    earlier_contact = (
+        Session.query(Contact.id)
+        .filter(Contact.alias_id == alias_id, Contact.id < contact_id)
+        .first()
+    )
+    if earlier_contact is not None:
+        Session.commit()
+        return
+
+    db_alias.set_sender_allow_domains({domain})
+    Session.add(db_alias)
+    Session.commit()
+
+
 def create_contact(
     email: str,
     alias: Alias,
@@ -90,15 +137,16 @@ def create_contact(
     if contact is not None:
         return __update_contact_if_needed(contact, name, mail_from)
 
-    # Must be computed before the contact is created below, otherwise the
-    # query would also match the new row. Gated by the feature flags so
-    # non-users never run it — the cheap checks short-circuit the query.
-    is_first_contact = (
+    # Cheap gate for the auto-trust-first-contact feature. The authoritative
+    # first-contact detection and allow-list write happen after the contact is
+    # created, under an alias row lock (_maybe_auto_trust_first_contact), so two
+    # concurrent first senders cannot both observe an empty allow-list and clobber
+    # each other's trusted domain.
+    auto_trust_candidate = (
         email != ""
         and not alias.sender_allow_list
         and alias.user.sender_warnings_enabled
         and alias.user.auto_trust_first_contact
-        and Contact.filter_by(alias_id=alias.id).first() is None
     )
 
     # Create the contact
@@ -134,17 +182,8 @@ def create_contact(
             f"Created contact {contact} for alias {alias} with email {email} invalid_email={is_invalid_email}"
         )
 
-        if is_first_contact:
-            email_to_extract = (
-                email
-                if email
-                else (mail_from if mail_from and mail_from != "<>" else "")
-            )
-            domain = email_to_extract.split("@")[-1] if "@" in email_to_extract else ""
-            if domain:
-                alias.set_sender_allow_domains({domain})
-                Session.add(alias)
-                Session.commit()
+        if auto_trust_candidate:
+            _maybe_auto_trust_first_contact(alias_id, contact_id, email)
 
         return ContactCreateResult(contact, created=True, error=None)
     except CannotCreateContactForReverseAlias as e:

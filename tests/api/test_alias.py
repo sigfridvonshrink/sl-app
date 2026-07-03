@@ -1030,3 +1030,41 @@ def test_allow_list_state_guarantees_visible_domains(flask_client, monkeypatch):
     state = build_allow_list_state(alias, visible_ids=[contacts["ccc.com"].id])
     domains = [m["domain"] for m in state["marked"]]
     assert "ccc.com" in domains
+
+
+def test_allow_list_state_aggregates_large_alias_in_sql(flask_client, monkeypatch):
+    # A large alias must not load every Contact into ORM objects to build the panel:
+    # domain groups are aggregated in SQL (grouped by sender host, then folded into the
+    # registered domain), and the marked list stays bounded to the page past the cap.
+    from app import sender_warning_utils
+    from app.sender_warning_utils import build_allow_list_state
+
+    monkeypatch.setattr(sender_warning_utils, "MARKED_PANEL_LIMIT", 3)
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+
+    # 10 registered domains, 5 contacts each (5 distinct subdomains that fold to the
+    # same registered domain) -> 50 contacts, far past the cap.
+    for d in range(10):
+        for c in range(5):
+            Contact.create(
+                alias_id=alias.id,
+                user_id=user.id,
+                website_email=f"u{c}@sub{c}.dom{d}.com",
+                reply_email=f"r{d}_{c}@sl.io",
+            )
+    alias.set_sender_allow_domains({"trusted.com"})
+    Session.commit()
+
+    state = build_allow_list_state(alias)
+    # subdomains folded: 10 registered domains marked, not 50 hosts
+    assert state["marked_total"] == 10
+    # over the cap with no page context -> nothing listed, but the total is reported
+    assert state["marked"] == []
+    assert state["has_more"] is True
+
+    # a focus domain stays actionable past the cap and carries its full folded count
+    focused = build_allow_list_state(alias, focus_domain="dom4.com")
+    assert [m["domain"] for m in focused["marked"]] == ["dom4.com"]
+    assert focused["marked"][0]["contacts"] == 5

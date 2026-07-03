@@ -727,3 +727,49 @@ def test_bounded_contact_email_count_caps_at_decay_bound(flask_client):
             commit=True,
         )
     assert bounded_contact_email_count(contact, user) == 6
+
+
+def test_bounded_contact_email_count_counts_distinct_inbound_messages(flask_client):
+    # The forward path writes one EmailLog per mailbox delivery. A contact forwarded to
+    # two mailboxes must advance the warning/decay count once per inbound message, not
+    # once per mailbox, else multi-mailbox aliases decay (and auto-trust) too fast.
+    from app.sender_warning_utils import (
+        bounded_contact_email_count,
+        build_contact_markers,
+        warning_tier_index,
+    )
+
+    user = create_new_user()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    alias.set_sender_allow_domains(
+        {"trusted.com"}
+    )  # arm feature; external is untrusted
+    Session.commit()
+    contact = Contact.create(
+        user_id=user.id,
+        alias_id=alias.id,
+        website_email="sender@external.com",
+        reply_email=f"{random_string()}@{EMAIL_DOMAIN}",
+        commit=True,
+    )
+
+    # 3 inbound messages, each fanned out to 2 mailboxes -> 6 EmailLog rows sharing 3
+    # distinct message ids.
+    for i in range(3):
+        for _mailbox_delivery in range(2):
+            EmailLog.create(
+                contact_id=contact.id,
+                user_id=user.id,
+                mailbox_id=user.default_mailbox_id,
+                alias_id=alias.id,
+                message_id=f"inbound-{i}@ext",
+                commit=True,
+            )
+
+    # distinct inbound messages (3), not EmailLog rows (6)
+    assert bounded_contact_email_count(contact, user) == 3
+    # the batched per-contact path agrees with the single-contact path
+    assert build_contact_markers(alias, [contact]) == {
+        str(contact.id): warning_tier_index(contact, 3, user)
+    }

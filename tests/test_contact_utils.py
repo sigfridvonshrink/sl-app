@@ -375,3 +375,58 @@ def test_warning_state_for_contact_none_when_feature_off():
     alias.set_sender_allow_domains({"other.com"})
     Session.commit()
     assert warning_state_for_contact(contact, 0) is None
+
+
+# --- auto-trust-first-contact: lost-update / race protection ---------------
+#
+# The forward path runs create_contact from multiple email-handler workers on
+# separate DB connections; the alias row lock in _maybe_auto_trust_first_contact
+# is what serialises two concurrent first senders so neither loses its trusted
+# domain. The test Session is bound to a single shared connection, so genuine
+# cross-connection locking can't be reproduced here. These tests instead assert
+# the deterministic invariants the lock upholds: an existing trust is never
+# overwritten, and only the genuine first contact seeds the list.
+
+
+def test_auto_trust_first_contact_does_not_overwrite_existing_trust():
+    # A second sender must never clobber a domain a prior (concurrent) first
+    # sender already trusted -- the lost update the alias lock prevents.
+    user = create_new_user()
+    user.flags = (
+        user.flags | User.FLAG_SENDER_WARNINGS | User.FLAG_AUTO_TRUST_FIRST_CONTACT
+    )
+    alias = Alias.create_new_random(user)
+    alias.set_sender_allow_domains({"first.com"})  # writer A already committed
+    Session.commit()
+
+    result = create_contact("b@second.com", alias, automatic_created=True)
+    assert result.error is None
+
+    Session.refresh(alias)
+    assert alias.get_sender_allow_domains() == {"first.com"}
+
+
+def test_auto_trust_only_seeds_for_the_genuine_first_contact():
+    # allow-list empty but an earlier contact already exists (e.g. the feature was
+    # enabled after the fact): a newly arriving contact is not the first, so it must
+    # not seed the list. This is the earlier-contact guard inside the alias lock.
+    user = create_new_user()
+    user.flags = (
+        user.flags | User.FLAG_SENDER_WARNINGS | User.FLAG_AUTO_TRUST_FIRST_CONTACT
+    )
+    alias = Alias.create_new_random(user)
+    Session.commit()
+    # pre-existing contact created directly, so the allow-list stays empty
+    Contact.create(
+        alias_id=alias.id,
+        user_id=user.id,
+        website_email="earlier@earlier.com",
+        reply_email="rEarlier@sl.io",
+        commit=True,
+    )
+
+    result = create_contact("late@late.com", alias, automatic_created=True)
+    assert result.error is None
+
+    Session.refresh(alias)
+    assert alias.sender_allow_list is None  # not the first contact -> nothing seeded

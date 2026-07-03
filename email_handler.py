@@ -701,6 +701,26 @@ def handle_forward(envelope, msg: Message, rcpt_to: str) -> List[Tuple[bool, str
         else:
             return [(False, status.E516)]
 
+    # Decide the unexpected-sender outcome once per inbound message, before the mailbox
+    # fan-out. The forward path writes one EmailLog per mailbox, so computing this inside
+    # the loop would advance the decay count (and fire auto-trust) once per mailbox
+    # rather than once per message. The resulting marker (if any) is applied to each
+    # per-mailbox copy below.
+    marker_tag = None
+    if sender_not_trusted:
+        emails_count = bounded_contact_email_count(contact, user)
+        if should_auto_trust(contact, emails_count, user):
+            # decay terminus: a long-known sender is promoted into the trusted set
+            # (recorded, reversible) instead of carrying a marker forever.
+            Alias.lock_for_update(contact.alias_id)
+            domains = alias.get_sender_allow_domains()
+            domains.add(contact.registered_domain)
+            alias.set_sender_allow_domains(domains)
+            Session.commit()
+            LOG.d("Auto-trusted %s for alias %s", contact.registered_domain, alias)
+        else:
+            marker_tag = get_warning_marker(contact, emails_count, user)
+
     for mailbox in mailboxes:
         if not mailbox.verified:
             LOG.d("%s unverified, do not forward", mailbox)
@@ -748,7 +768,7 @@ def handle_forward(envelope, msg: Message, rcpt_to: str) -> List[Tuple[bool, str
                     mailbox,
                     user,
                     reply_to_contact,
-                    sender_not_trusted,
+                    marker_tag,
                     contact_created,
                 )
             )
@@ -765,7 +785,7 @@ def forward_email_to_mailbox(
     mailbox,
     user,
     reply_to_contacts: list[Contact],
-    sender_not_trusted: bool = False,
+    marker_tag: Optional[str] = None,
     contact_created: bool = False,
 ) -> Tuple[bool, str]:
     LOG.debug(f"Forward {contact} -> {alias} -> {mailbox} ({mailbox.user})")
@@ -912,21 +932,10 @@ def forward_email_to_mailbox(
             f"""Forwarded by SimpleLogin to {alias.email} from "{sender}" with <b>{orig_subject}</b> as subject""",
         )
 
-    marker_tag = None
-    if sender_not_trusted:
-        emails_count = bounded_contact_email_count(contact, user)
-        if should_auto_trust(contact, emails_count, user):
-            # decay terminus: a long-known sender is promoted into the trusted set
-            # (recorded, reversible) instead of carrying a marker forever.
-            domains = alias.get_sender_allow_domains()
-            domains.add(contact.registered_domain)
-            alias.set_sender_allow_domains(domains)
-            Session.commit()
-            LOG.d("Auto-trusted %s for alias %s", contact.registered_domain, alias)
-        else:
-            marker_tag = get_warning_marker(contact, emails_count, user)
-            if user.marker_in_subject:
-                apply_marker_to_subject(msg, marker_tag, contact, alias)
+    # marker_tag is the per-message unexpected-sender decision (computed once in
+    # handle_forward, before the mailbox fan-out). Applied to this mailbox's copy.
+    if marker_tag is not None and user.marker_in_subject:
+        apply_marker_to_subject(msg, marker_tag, contact, alias)
 
     # create PGP email if needed
     if mailbox.pgp_enabled() and user.is_premium() and not alias.disable_pgp:

@@ -22,12 +22,13 @@ from email.message import Message
 from email.utils import formataddr
 
 import arrow
-from sqlalchemy import func
+from sqlalchemy import func, distinct
 
 from app import config
 from app.db import Session
 from app.log import LOG
 from app.models import Contact, Alias, EmailLog
+from app.utils import get_registered_domain
 from app.email_utils import (
     add_or_replace_header,
     get_header_unicode,
@@ -181,16 +182,24 @@ def decay_count_bound(user) -> int:
 
 
 def bounded_contact_email_count(contact: Contact, user) -> int:
-    """Contact's forwarded-message count, capped at decay_count_bound(user).
+    """Contact's distinct inbound-message count, capped at decay_count_bound(user).
 
-    Replaces an unbounded COUNT over the contact's email_log rows on the mail hot path
-    (and the per-contact dashboard state): the decay ladder saturates at a handful of
-    messages, so a bounded LIMIT scan is O(bound) instead of O(history) yet yields an
-    identical marker. Capped values still exceed every threshold, so tier selection is
-    unchanged.
+    Counts distinct inbound messages, not EmailLog rows. The forward path writes one
+    EmailLog per mailbox delivery, so an alias with N mailboxes would otherwise decay
+    warnings (and reach auto-trust) N times faster than configured. Grouping by
+    message_id collapses the per-mailbox fan-out of a single inbound message back to
+    one. Still a bounded LIMIT scan (the decay ladder saturates at a handful of
+    messages), so it stays O(bound) instead of O(history) with an identical marker.
     """
     bound = decay_count_bound(user)
-    return EmailLog.filter_by(contact_id=contact.id).limit(bound).count()
+    subq = (
+        Session.query(EmailLog.message_id)
+        .filter(EmailLog.contact_id == contact.id)
+        .group_by(EmailLog.message_id)
+        .limit(bound)
+        .subquery()
+    )
+    return Session.query(func.count()).select_from(subq).scalar()
 
 
 def get_configured_markers(user) -> list:
@@ -329,8 +338,11 @@ def build_contact_markers(alias: Alias, contacts) -> dict:
     if not contacts:
         return {}
     ids = [c.id for c in contacts]
+    # distinct inbound messages per contact (see bounded_contact_email_count): the
+    # forward path writes one EmailLog per mailbox, so counting rows would over-count
+    # multi-mailbox aliases and paint a lower (quieter) tier than the mail path uses.
     counts = dict(
-        Session.query(EmailLog.contact_id, func.count(EmailLog.id))
+        Session.query(EmailLog.contact_id, func.count(distinct(EmailLog.message_id)))
         .filter(EmailLog.contact_id.in_(ids))
         .group_by(EmailLog.contact_id)
         .all()
@@ -367,13 +379,42 @@ def build_allow_list_state(
     tags.
     """
     trusted_set = alias.get_sender_allow_domains()
-    contacts = Contact.filter_by(alias_id=alias.id).all()
+
+    # Aggregate contact counts per sender host in SQL instead of loading every Contact
+    # row into ORM objects. The registered domain is not a stored column (it is derived
+    # via the public-suffix list), so we group by the raw sender host in the database --
+    # far lower cardinality than the contacts themselves -- and fold each distinct host
+    # into its registered domain in Python. sender mirrors Contact.sender_domain_source:
+    # website_email, falling back to a non-"<>" mail_from.
+    rows = Session.execute(
+        """
+        SELECT host, count(*) AS cnt
+        FROM (
+            SELECT
+                CASE
+                    WHEN position('@' in sender) > 0
+                    THEN split_part(sender, '@', 2)
+                    ELSE sender
+                END AS host
+            FROM (
+                SELECT lower(
+                    coalesce(nullif(website_email, ''), nullif(mail_from, '<>'))
+                ) AS sender
+                FROM contact
+                WHERE alias_id = :alias_id
+            ) s
+            WHERE sender IS NOT NULL AND sender <> ''
+        ) h
+        GROUP BY host
+        """,
+        {"alias_id": alias.id},
+    ).fetchall()
 
     domain_counts: Counter = Counter()
-    for contact in contacts:
-        domain = contact.registered_domain
+    for host, cnt in rows:
+        domain = get_registered_domain(host)
         if domain:
-            domain_counts[domain] += 1
+            domain_counts[domain] += cnt
 
     trusted = [
         {
@@ -387,14 +428,22 @@ def build_allow_list_state(
     marked_total = sum(1 for d in domain_counts if d not in trusted_set)
 
     # domains guaranteed in the list: an explicit focus first, then the domains of the
-    # contacts visible on the page. Kept only if marked (present, not trusted), deduped.
-    visible_set = set(visible_ids or [])
-    pin_order = [focus_domain] if focus_domain else []
-    pin_order += [
-        c.registered_domain
-        for c in contacts
-        if c.id in visible_set and c.registered_domain
-    ]
+    # contacts visible on the page. Only the visible contacts are loaded (bounded by the
+    # page size), never every contact of the alias. Kept only if marked (present, not
+    # trusted), deduped.
+    visible_ids = list(visible_ids or [])
+    visible_domains = []
+    if visible_ids:
+        by_id = {
+            c.id: c
+            for c in Session.query(Contact).filter(Contact.id.in_(visible_ids)).all()
+        }
+        for cid in visible_ids:
+            c = by_id.get(cid)
+            if c is not None and c.registered_domain:
+                visible_domains.append(c.registered_domain)
+
+    pin_order = ([focus_domain] if focus_domain else []) + visible_domains
     pinned = []
     for d in pin_order:
         if d in domain_counts and d not in trusted_set and d not in pinned:

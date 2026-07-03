@@ -296,28 +296,33 @@ def setting():
             # tunable decay ladder).
 
             enable = request.form.get("enable_warnings") == "on"
-            auto_trust = request.form.get("auto_trust_first") == "on"
+            auto_trust_first = request.form.get("auto_trust_first") == "on"
             marker_in_subject = request.form.get("marker_in_subject") == "on"
 
-            flags = current_user.flags
-            flags = (
-                flags | User.FLAG_SENDER_WARNINGS
+            # Compute the new flags but do NOT mutate current_user yet: the whole form
+            # must apply atomically when the user clicks update. Applying the toggles
+            # ahead of (or independently from) decay validation would either drop a
+            # toggle to a decay rollback or half-apply the form -- both confusing.
+            new_flags = current_user.flags
+            new_flags = (
+                new_flags | User.FLAG_SENDER_WARNINGS
                 if enable
-                else flags & ~User.FLAG_SENDER_WARNINGS
+                else new_flags & ~User.FLAG_SENDER_WARNINGS
             )
-            flags = (
-                flags | User.FLAG_AUTO_TRUST_FIRST_CONTACT
-                if auto_trust
-                else flags & ~User.FLAG_AUTO_TRUST_FIRST_CONTACT
+            new_flags = (
+                new_flags | User.FLAG_AUTO_TRUST_FIRST_CONTACT
+                if auto_trust_first
+                else new_flags & ~User.FLAG_AUTO_TRUST_FIRST_CONTACT
             )
-            flags = (
-                flags | User.FLAG_MARKER_IN_SUBJECT
+            new_flags = (
+                new_flags | User.FLAG_MARKER_IN_SUBJECT
                 if marker_in_subject
-                else flags & ~User.FLAG_MARKER_IN_SUBJECT
+                else new_flags & ~User.FLAG_MARKER_IN_SUBJECT
             )
-            current_user.flags = flags
 
             if request.form.get("reset_decay"):
+                # reset has no advanced field to validate: apply toggles + reset together
+                current_user.flags = new_flags
                 current_user.sender_warning_decay = None
                 Session.commit()
                 flash("Settings updated; decay reset to defaults", "success")
@@ -327,6 +332,9 @@ def setting():
                 raw = (request.form.get(name) or "").strip()
                 return int(raw) if raw != "" else None
 
+            # Validate the advanced decay ladder BEFORE mutating any state. On failure
+            # nothing is written, so the toggles are neither lost nor partially applied;
+            # the user gets one error and the form stays in its previous saved state.
             try:
                 tiers = [
                     {
@@ -338,22 +346,26 @@ def setting():
                 ]
                 auto_days = _opt_int("autotrust_days")
                 auto_count = _opt_int("autotrust_count")
-                auto_trust = None
+                auto_trust_cfg = None
                 if auto_days is not None or auto_count is not None:
-                    auto_trust = {"min_days": auto_days, "min_count": auto_count}
+                    auto_trust_cfg = {"min_days": auto_days, "min_count": auto_count}
 
-                current_user.sender_warning_decay = validate_decay_config(
+                decay = validate_decay_config(
                     {
                         "tiers": tiers,
                         "floor_marker": request.form.get("floor_marker", ""),
-                        "auto_trust": auto_trust,
+                        "auto_trust": auto_trust_cfg,
                     }
                 )
-                Session.commit()
-                flash("Your preference has been updated", "success")
             except (ValueError, DecayConfigError) as e:
-                Session.rollback()
                 flash(f"Invalid decay settings: {e}", "error")
+                return redirect(url_for("dashboard.setting") + "#sender-warnings")
+
+            # Validated: apply the toggles and decay ladder in a single commit.
+            current_user.flags = new_flags
+            current_user.sender_warning_decay = decay
+            Session.commit()
+            flash("Your preference has been updated", "success")
             return redirect(url_for("dashboard.setting") + "#sender-warnings")
 
     manual_sub = ManualSubscription.get_by(user_id=current_user.id)
