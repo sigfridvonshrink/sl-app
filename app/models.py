@@ -2345,6 +2345,18 @@ class EmailLog(Base, ModelMixin):
         Index("ix_email_log_bounced_mailbox_id", "bounced_mailbox_id"),
         Index("ix_email_log_refused_email_id", "refused_email_id"),
         Index("ix_email_log_user_id_email_log_id", "user_id", "id"),
+        # Fork (unexpected-sender warnings): supports the bounded distinct-message
+        # count in app/sender_warning_utils.bounded_contact_email_count -- a partial
+        # index over delivered inbound forwards only, so Postgres can stream distinct
+        # message_ids per contact and stop after a few rows on the mail hot path.
+        Index(
+            "ix_email_log_contact_delivered_message",
+            "contact_id",
+            "message_id",
+            postgresql_where=sa.text(
+                "is_reply = false AND blocked = false AND refused_email_id IS NULL"
+            ),
+        ),
     )
 
     user_id = sa.Column(sa.ForeignKey(User.id, ondelete="cascade"), nullable=False)

@@ -1068,3 +1068,39 @@ def test_allow_list_state_aggregates_large_alias_in_sql(flask_client, monkeypatc
     focused = build_allow_list_state(alias, focus_domain="dom4.com")
     assert [m["domain"] for m in focused["marked"]] == ["dom4.com"]
     assert focused["marked"][0]["contacts"] == 5
+
+
+def test_allow_list_state_ignores_cross_alias_visible_ids(flask_client):
+    # visible_ids is caller-supplied: it must be constrained to this alias, so a
+    # contact id belonging to another alias (or user) cannot be probed via the panel.
+    from app.sender_warning_utils import build_allow_list_state
+
+    user, api_key = get_new_user_and_api_key()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    other_alias = Alias.create_new_random(user)
+    alias.set_sender_allow_domains({"trusted.com"})
+    Session.commit()
+
+    # a marked contact on `alias`, and a foreign contact on `other_alias`
+    mine = Contact.create(
+        alias_id=alias.id,
+        user_id=user.id,
+        website_email="a@mine.com",
+        reply_email="r1@sl.io",
+        flush=True,
+    )
+    foreign = Contact.create(
+        alias_id=other_alias.id,
+        user_id=user.id,
+        website_email="a@foreign.com",
+        reply_email="r2@sl.io",
+        flush=True,
+    )
+    Session.commit()
+
+    # pass the foreign id as visible -> its domain must not surface for `alias`
+    state = build_allow_list_state(alias, visible_ids=[mine.id, foreign.id])
+    domains = {m["domain"] for m in state["marked"]}
+    assert "mine.com" in domains
+    assert "foreign.com" not in domains

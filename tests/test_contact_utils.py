@@ -389,21 +389,52 @@ def test_warning_state_for_contact_none_when_feature_off():
 
 
 def test_auto_trust_first_contact_does_not_overwrite_existing_trust():
-    # A second sender must never clobber a domain a prior (concurrent) first
-    # sender already trusted -- the lost update the alias lock prevents.
+    # Drive the helper directly (bypassing the cheap in-memory gate in create_contact)
+    # so the under-lock re-check branch actually runs: when populate_existing() shows a
+    # domain already trusted -- as a concurrent first sender that committed first would
+    # leave it -- the helper must not overwrite it. This is the lost-update the alias
+    # lock + re-read prevents.
+    from app.contact_utils import _maybe_auto_trust_first_contact
+
     user = create_new_user()
     user.flags = (
         user.flags | User.FLAG_SENDER_WARNINGS | User.FLAG_AUTO_TRUST_FIRST_CONTACT
     )
     alias = Alias.create_new_random(user)
-    alias.set_sender_allow_domains({"first.com"})  # writer A already committed
+    alias.set_sender_allow_domains({"first.com"})  # a prior first sender already won
     Session.commit()
+    contact = Contact.create(
+        alias_id=alias.id,
+        user_id=user.id,
+        website_email="b@second.com",
+        reply_email="rB@sl.io",
+        commit=True,
+    )
 
-    result = create_contact("b@second.com", alias, automatic_created=True)
-    assert result.error is None
+    _maybe_auto_trust_first_contact(alias.id, contact.id, "b@second.com")
 
     Session.refresh(alias)
-    assert alias.get_sender_allow_domains() == {"first.com"}
+    assert alias.get_sender_allow_domains() == {"first.com"}  # not overwritten
+
+
+def test_auto_trust_first_contact_emits_audit_log():
+    # Seeding the allow-list is an alias mutation and must be audit-logged.
+    user = create_new_user()
+    user.flags = (
+        user.flags | User.FLAG_SENDER_WARNINGS | User.FLAG_AUTO_TRUST_FIRST_CONTACT
+    )
+    alias = Alias.create_new_random(user)
+    Session.commit()
+
+    result = create_contact("first@seedme.com", alias, automatic_created=True)
+    assert result.error is None
+    Session.refresh(alias)
+    assert alias.get_sender_allow_domains() == {"seedme.com"}
+
+    logs = AliasAuditLog.filter_by(alias_id=alias.id).all()
+    assert any(
+        "Auto-trusted first-contact sender domain seedme.com" in m.message for m in logs
+    )
 
 
 def test_auto_trust_only_seeds_for_the_genuine_first_contact():

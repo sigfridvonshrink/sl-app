@@ -773,3 +773,46 @@ def test_bounded_contact_email_count_counts_distinct_inbound_messages(flask_clie
     assert build_contact_markers(alias, [contact]) == {
         str(contact.id): warning_tier_index(contact, 3, user)
     }
+
+
+def test_bounded_contact_email_count_excludes_non_delivered_logs(flask_client):
+    # Decay measures inbound-sender familiarity: reply-phase, blocked and
+    # refused/quarantined logs must not count toward the warning count or auto-trust.
+    from app.sender_warning_utils import bounded_contact_email_count
+    from app.models import RefusedEmail
+
+    user = create_new_user()
+    user.flags = user.flags | User.FLAG_SENDER_WARNINGS
+    alias = Alias.create_new_random(user)
+    alias.set_sender_allow_domains({"trusted.com"})
+    Session.commit()
+    contact = Contact.create(
+        user_id=user.id,
+        alias_id=alias.id,
+        website_email="sender@external.com",
+        reply_email=f"{random_string()}@{EMAIL_DOMAIN}",
+        commit=True,
+    )
+
+    def _log(**kw):
+        EmailLog.create(
+            contact_id=contact.id,
+            user_id=user.id,
+            mailbox_id=user.default_mailbox_id,
+            alias_id=alias.id,
+            commit=True,
+            **kw,
+        )
+
+    # 2 delivered inbound forwards
+    _log(message_id="fwd-1@ext")
+    _log(message_id="fwd-2@ext")
+    # noise that must NOT count
+    _log(message_id="reply-1@ext", is_reply=True)
+    _log(message_id="blocked-1@ext", blocked=True)
+    refused = RefusedEmail.create(
+        user_id=user.id, path=None, full_report_path=random_string(20), commit=True
+    )
+    _log(message_id="refused-1@ext", refused_email_id=refused.id)
+
+    assert bounded_contact_email_count(contact, user) == 2

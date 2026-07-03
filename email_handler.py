@@ -62,6 +62,7 @@ from app.alias_utils import (
     change_alias_status,
     get_alias_recipient_name,
 )
+from app.alias_audit_log_utils import emit_alias_audit_log, AliasAuditLogAction
 from app.db import Session
 from app.email import status, headers
 from app.email.checks import check_recipient_limit
@@ -705,7 +706,9 @@ def handle_forward(envelope, msg: Message, rcpt_to: str) -> List[Tuple[bool, str
     # fan-out. The forward path writes one EmailLog per mailbox, so computing this inside
     # the loop would advance the decay count (and fire auto-trust) once per mailbox
     # rather than once per message. The resulting marker (if any) is applied to each
-    # per-mailbox copy below.
+    # per-mailbox copy below. emails_count reflects prior delivered messages -- this
+    # message's own logs are written later in the loop, so it is not counted toward its
+    # own tier (the decision is "how familiar was this sender before now").
     marker_tag = None
     if sender_not_trusted:
         emails_count = bounded_contact_email_count(contact, user)
@@ -716,6 +719,12 @@ def handle_forward(envelope, msg: Message, rcpt_to: str) -> List[Tuple[bool, str
             domains = alias.get_sender_allow_domains()
             domains.add(contact.registered_domain)
             alias.set_sender_allow_domains(domains)
+            emit_alias_audit_log(
+                alias=alias,
+                action=AliasAuditLogAction.UpdateAlias,
+                message=f"Auto-trusted sender domain {contact.registered_domain} at decay terminus",
+                commit=False,
+            )
             Session.commit()
             LOG.d("Auto-trusted %s for alias %s", contact.registered_domain, alias)
         else:

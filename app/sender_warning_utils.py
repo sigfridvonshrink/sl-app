@@ -22,7 +22,7 @@ from email.message import Message
 from email.utils import formataddr
 
 import arrow
-from sqlalchemy import func, distinct
+from sqlalchemy import func, distinct, text
 
 from app import config
 from app.db import Session
@@ -181,20 +181,45 @@ def decay_count_bound(user) -> int:
     return max(thresholds) + 1
 
 
-def bounded_contact_email_count(contact: Contact, user) -> int:
-    """Contact's distinct inbound-message count, capped at decay_count_bound(user).
+def _delivered_forward_filter(query):
+    """Restrict an EmailLog query to delivered inbound forwards.
 
-    Counts distinct inbound messages, not EmailLog rows. The forward path writes one
+    The feature measures inbound-sender familiarity, so reply-phase logs (is_reply),
+    blocked/quarantine-return logs (blocked) and quarantined/refused logs
+    (refused_email_id) must NOT count: a user's own replies or previously blocked mail
+    should never decay a warning or satisfy auto-trust.
+    """
+    return query.filter(
+        EmailLog.is_reply.is_(False),
+        EmailLog.blocked.is_(False),
+        EmailLog.refused_email_id.is_(None),
+    )
+
+
+def bounded_contact_email_count(contact: Contact, user) -> int:
+    """Distinct delivered inbound messages from this contact, capped at
+    decay_count_bound(user).
+
+    Counts distinct inbound messages, not EmailLog rows: the forward path writes one
     EmailLog per mailbox delivery, so an alias with N mailboxes would otherwise decay
     warnings (and reach auto-trust) N times faster than configured. Grouping by
-    message_id collapses the per-mailbox fan-out of a single inbound message back to
-    one. Still a bounded LIMIT scan (the decay ladder saturates at a handful of
-    messages), so it stays O(bound) instead of O(history) with an identical marker.
+    message_id collapses that fan-out back to one message, and only delivered forwards
+    are counted (see _delivered_forward_filter).
+
+    Bounded by LIMIT: the decay ladder saturates at a handful of messages, and the
+    partial index ix_email_log_contact_delivered_message (contact_id, message_id over
+    delivered forwards) lets Postgres stream distinct message_ids and stop after
+    `bound`, so this stays cheap on the mail hot path regardless of history length.
+
+    Note: a forward whose source had no Message-ID header is logged with the literal
+    "None", so several such messages from one sender collapse into a single group and
+    are under-counted -- conservative (the sender stays loud / never auto-trusts).
     """
     bound = decay_count_bound(user)
     subq = (
-        Session.query(EmailLog.message_id)
-        .filter(EmailLog.contact_id == contact.id)
+        _delivered_forward_filter(
+            Session.query(EmailLog.message_id).filter(EmailLog.contact_id == contact.id)
+        )
         .group_by(EmailLog.message_id)
         .limit(bound)
         .subquery()
@@ -338,12 +363,16 @@ def build_contact_markers(alias: Alias, contacts) -> dict:
     if not contacts:
         return {}
     ids = [c.id for c in contacts]
-    # distinct inbound messages per contact (see bounded_contact_email_count): the
-    # forward path writes one EmailLog per mailbox, so counting rows would over-count
-    # multi-mailbox aliases and paint a lower (quieter) tier than the mail path uses.
+    # distinct delivered inbound messages per contact (see bounded_contact_email_count):
+    # the forward path writes one EmailLog per mailbox, so counting rows would over-count
+    # multi-mailbox aliases; replies/blocked/refused logs are excluded so the dashboard
+    # tier matches what the mail path computes.
     counts = dict(
-        Session.query(EmailLog.contact_id, func.count(distinct(EmailLog.message_id)))
-        .filter(EmailLog.contact_id.in_(ids))
+        _delivered_forward_filter(
+            Session.query(
+                EmailLog.contact_id, func.count(distinct(EmailLog.message_id))
+            ).filter(EmailLog.contact_id.in_(ids))
+        )
         .group_by(EmailLog.contact_id)
         .all()
     )
@@ -387,26 +416,28 @@ def build_allow_list_state(
     # into its registered domain in Python. sender mirrors Contact.sender_domain_source:
     # website_email, falling back to a non-"<>" mail_from.
     rows = Session.execute(
-        """
-        SELECT host, count(*) AS cnt
-        FROM (
-            SELECT
-                CASE
-                    WHEN position('@' in sender) > 0
-                    THEN split_part(sender, '@', 2)
-                    ELSE sender
-                END AS host
+        text(
+            """
+            SELECT host, count(*) AS cnt
             FROM (
-                SELECT lower(
-                    coalesce(nullif(website_email, ''), nullif(mail_from, '<>'))
-                ) AS sender
-                FROM contact
-                WHERE alias_id = :alias_id
-            ) s
-            WHERE sender IS NOT NULL AND sender <> ''
-        ) h
-        GROUP BY host
-        """,
+                SELECT
+                    CASE
+                        WHEN position('@' in sender) > 0
+                        THEN split_part(sender, '@', 2)
+                        ELSE sender
+                    END AS host
+                FROM (
+                    SELECT lower(
+                        coalesce(nullif(website_email, ''), nullif(mail_from, '<>'))
+                    ) AS sender
+                    FROM contact
+                    WHERE alias_id = :alias_id
+                ) s
+                WHERE sender IS NOT NULL AND sender <> ''
+            ) h
+            GROUP BY host
+            """
+        ),
         {"alias_id": alias.id},
     ).fetchall()
 
@@ -428,15 +459,18 @@ def build_allow_list_state(
     marked_total = sum(1 for d in domain_counts if d not in trusted_set)
 
     # domains guaranteed in the list: an explicit focus first, then the domains of the
-    # contacts visible on the page. Only the visible contacts are loaded (bounded by the
-    # page size), never every contact of the alias. Kept only if marked (present, not
-    # trusted), deduped.
-    visible_ids = list(visible_ids or [])
+    # contacts visible on the page. visible_ids is caller-supplied (an API query param),
+    # so it is capped to one page and constrained to THIS alias -- never a cross-alias /
+    # cross-user id probe, and never an unbounded id list. Kept only if marked (present,
+    # not trusted), deduped.
+    visible_ids = list(dict.fromkeys(visible_ids or []))[: config.PAGE_LIMIT]
     visible_domains = []
     if visible_ids:
         by_id = {
             c.id: c
-            for c in Session.query(Contact).filter(Contact.id.in_(visible_ids)).all()
+            for c in Session.query(Contact)
+            .filter(Contact.id.in_(visible_ids), Contact.alias_id == alias.id)
+            .all()
         }
         for cid in visible_ids:
             c = by_id.get(cid)

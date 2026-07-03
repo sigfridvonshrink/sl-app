@@ -47,8 +47,15 @@ def _maybe_auto_trust_first_contact(alias_id: int, contact_id: int, email: str) 
     flags). Serialises on the alias row so that when several first messages for a
     brand-new alias arrive concurrently, exactly one of them seeds the allow-list and
     no writer's trusted domain is lost: the first to take the lock -- seeing an empty
-    list and no earlier contact -- writes its domain; any later writer sees the list
-    already populated and leaves it untouched.
+    list and no committed earlier contact -- writes its domain; any later writer sees
+    the list already populated and leaves it untouched.
+
+    Semantics under a true race are "first to commit-and-lock wins", NOT strictly
+    lowest contact id: the contact row is created and committed before the lock is
+    taken, so a later contact that commits first can seed the list while an
+    earlier-id contact is still uncommitted (and thus invisible to the earlier-contact
+    check). This is acceptable -- the guarantees that matter hold regardless of which
+    genuine first sender wins: exactly one domain is trusted and none is ever lost.
     """
     domain = email.split("@")[-1] if "@" in email else ""
     if not domain:
@@ -84,6 +91,12 @@ def _maybe_auto_trust_first_contact(alias_id: int, contact_id: int, email: str) 
 
     db_alias.set_sender_allow_domains({domain})
     Session.add(db_alias)
+    emit_alias_audit_log(
+        alias=db_alias,
+        action=AliasAuditLogAction.UpdateAlias,
+        message=f"Auto-trusted first-contact sender domain {domain}",
+        commit=False,
+    )
     Session.commit()
 
 
