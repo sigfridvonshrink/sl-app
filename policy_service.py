@@ -64,7 +64,26 @@ def handle_client(client_socket):
 
 
 def process_request(client_socket, request_data):
-    """Process a single policy request."""
+    """Process a single policy request, then end its database session.
+
+    Postfix keeps a policy connection open across many requests, and the scoped
+    session would otherwise keep the transaction its first query began open until
+    the service restarts: locks held for hours, and autovacuum unable to remove
+    any row that died after it began. Session.remove() rolls back whatever is
+    left (an alias auto-creation commits its own work first) and returns the
+    connection to the pool.
+    """
+    try:
+        _process_request(client_socket, request_data)
+    finally:
+        try:
+            Session.remove()
+        except Exception as e:
+            LOG.w(f"Could not end the database session: {str(e)}")
+
+
+def _process_request(client_socket, request_data):
+    """Answer a single policy request."""
 
     # Parse the request
     attributes = {}

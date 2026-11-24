@@ -10,7 +10,7 @@ Group=simplelogin
 # The working directory where the script is located
 WorkingDirectory=/home/simplelogin/sl-app
 
-ExecStart=/home/simplelogin/sl-app/.venv/bin/python3 email_handler.py
+ExecStart=/home/simplelogin/sl-app/.venv/bin/python3 email_handler.py --host 127.0.0.1
 
 # Restart the service if it fails
 Restart=on-failure
