@@ -1,6 +1,9 @@
+import os
+
 import arrow
 
 import cron
+from app import config
 from app.db import Session
 from app.mail_sender import mail_sender
 from app.models import (
@@ -13,6 +16,10 @@ from app.models import (
     User,
     PlanEnum,
     UserAuditLog,
+    Alias,
+    Contact,
+    EmailLog,
+    RefusedEmail,
 )
 from app.user_audit_log_utils import UserAuditLogAction
 from tests.utils import create_new_user, create_partner_linked_user, random_token
@@ -206,3 +213,62 @@ def test_cleanup_users():
         f"the {cron.DELETE_GRACE_DAYS} days grace period has expired"
         in audit_log.message
     )
+
+
+def _email_log(user, days_old: int) -> int:
+    alias = Alias.create_new_random(user)
+    contact = Contact.create(
+        user_id=user.id,
+        alias_id=alias.id,
+        website_email=f"{random_token()}@example.com",
+        reply_email=f"{random_token()}@sl.local",
+        commit=True,
+    )
+    return EmailLog.create(
+        user_id=user.id,
+        contact_id=contact.id,
+        alias_id=alias.id,
+        created_at=arrow.now().shift(days=-days_old),
+        commit=True,
+    ).id
+
+
+def test_delete_logs_keeps_email_logs_for_email_log_max_days(monkeypatch):
+    monkeypatch.setattr(config, "EMAIL_LOG_MAX_DAYS", 365)
+    user = create_new_user()
+    kept_id = _email_log(user, 300)
+    deleted_id = _email_log(user, 400)
+    cron.delete_logs()
+    assert EmailLog.get(kept_id) is not None
+    assert EmailLog.get(deleted_id) is None
+
+
+def test_delete_logs_default_is_two_weeks():
+    assert config.EMAIL_LOG_MAX_DAYS == 14
+
+
+def test_delete_refused_emails_deletes_overdue_and_missing_files(monkeypatch):
+    monkeypatch.setattr(config, "LOCAL_FILE_UPLOAD", True)
+    user = create_new_user()
+    overdue_path = f"refused-test/{random_token()}.eml"
+    full = os.path.join(config.UPLOAD_DIR, overdue_path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w") as f:
+        f.write("x")
+    overdue = RefusedEmail.create(
+        user_id=user.id,
+        path=overdue_path,
+        full_report_path=f"refused-test/{random_token()}.eml",  # never written
+        delete_at=arrow.now().shift(days=-30),
+        commit=True,
+    )
+    later = RefusedEmail.create(
+        user_id=user.id,
+        full_report_path=f"refused-test/{random_token()}.eml",
+        delete_at=arrow.now().shift(days=5),
+        commit=True,
+    )
+    cron.delete_refused_emails()
+    assert RefusedEmail.get(overdue.id).deleted
+    assert not os.path.exists(full)
+    assert not RefusedEmail.get(later.id).deleted

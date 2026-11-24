@@ -87,7 +87,7 @@ Fork-owned files (new; zero upstream conflict):
 - `app/certificate_auth.py` — client-cert subject → user lookup.
 - `policy_service.py` — Postfix sender-access socket daemon (verp/bounce + blocked-alias passthrough). Ends its database session after every request (`Session.remove()`), or Postfix's long-lived connection holds a transaction open for hours. No test coverage; smoke-test mail flow after upstream merges.
 - `cleanup_allow_lists.py` — fork maintenance script.
-- systemd units in `systemd/`.
+- systemd units in `systemd/`; `simplelogin-cleanup.{service,timer}` run the `cron.py` deletions daily (upstream: `crontab.yml` under yacron).
 - Fork tests: `tests/test_sender_warning_utils.py`, `tests/api/test_contact_ui_tag.py`, `tests/auth/test_certificate_auth.py`.
 
 Shared upstream files modified — watch these on rebase:
@@ -99,6 +99,7 @@ Shared upstream files modified — watch these on rebase:
 
 Shared changes that alter EXISTING behavior (not feature-gated — re-verify on merge):
 - `app/import_utils.py` — batch import now sends a client cert (`cert=(…batch-import-cert.pem…)`); depends on those PEM files existing.
+- `cron.py` / `app/s3.py` / `app/config.py` — retention: `EMAIL_LOG_MAX_DAYS` (default 14 = upstream's constant) sets `delete_logs`' email-log age; `delete_refused_emails` also deletes refused mails already past `delete_at` (upstream only those due within a day, so a missed day kept them forever); a local-storage `s3.delete` of a missing file is a no-op, as on S3. Candidates for upstream.
 - `server.py` / `app/log.py` / `job_runner.py` — debug flags + log levels changed (operational). `job_runner.py` otherwise matches upstream: upstream's `try/except IntegrityError` (commit `2aac58f7 "Rollback session"`) was once dropped by an upstream merge and has been restored; only `LOG.setLevel(logging.WARNING)` is a deliberate fork delta.
 
 Upstream test files: `tests/api/test_alias.py` carries appended fork tests but no existing upstream test was modified.

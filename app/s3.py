@@ -145,7 +145,9 @@ def get_url(key: str, expires_in=3600) -> str:
 def delete(path: str):
     if config.LOCAL_FILE_UPLOAD:
         file_path = os.path.join(config.UPLOAD_DIR, path)
-        os.remove(file_path)
+        # A missing file is not an error, as deleting a missing S3 key is not
+        if os.path.exists(file_path):
+            os.remove(file_path)
     else:
         _get_s3client().delete_object(Bucket=config.BUCKET, Key=path)
 

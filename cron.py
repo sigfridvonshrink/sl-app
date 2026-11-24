@@ -108,13 +108,13 @@ def delete_logs():
 
     Session.commit()
 
-    LOG.d("Deleting EmailLog older than 2 weeks")
+    LOG.d("Deleting EmailLog older than %s days", config.EMAIL_LOG_MAX_DAYS)
 
     total_deleted = 0
     batch_size = 500
     Session.execute("set session statement_timeout=30000").rowcount
     queries_done = 0
-    cutoff_time = arrow.now().shift(days=-14)
+    cutoff_time = arrow.now().shift(days=-config.EMAIL_LOG_MAX_DAYS)
     rows_to_delete = EmailLog.filter(EmailLog.created_at < cutoff_time).count()
     expected_queries = int(rows_to_delete / batch_size)
     sql = text(
@@ -141,7 +141,8 @@ def delete_refused_emails():
     for refused_email in (
         RefusedEmail.filter_by(deleted=False).order_by(RefusedEmail.id).all()
     ):
-        if arrow.now().shift(days=1) > refused_email.delete_at >= arrow.now():
+        # Overdue ones too: a day without a run would otherwise keep them forever
+        if arrow.now().shift(days=1) > refused_email.delete_at:
             LOG.d("Delete refused email %s", refused_email)
             if refused_email.path:
                 s3.delete(refused_email.path)

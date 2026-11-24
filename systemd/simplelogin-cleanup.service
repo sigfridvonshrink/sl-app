@@ -1,0 +1,24 @@
+[Unit]
+Description=SimpleLogin retention jobs (the cron.py deletions)
+# Not part of upstream: upstream runs cron.py from crontab.yml under yacron.
+# Runs on the node where the app runs: skipped (not failed) where simplelogin-job
+# is not active, so both nodes of a pair can carry the timer.
+After=network.target
+
+[Service]
+Type=oneshot
+User=simplelogin
+Group=simplelogin
+WorkingDirectory=/home/simplelogin/sl-app
+ExecCondition=/bin/systemctl is-active --quiet simplelogin-job.service
+# Ages come from .env: EMAIL_LOG_MAX_DAYS and AUDIT_LOG_MAX_DAYS; the rest are upstream's.
+# A failing job stops the run and leaves the unit failed; the next day's run retries.
+ExecStart=/home/simplelogin/sl-app/.venv/bin/python3 cron.py -j delete_logs
+ExecStart=/home/simplelogin/sl-app/.venv/bin/python3 cron.py -j delete_old_data
+ExecStart=/home/simplelogin/sl-app/.venv/bin/python3 cron.py -j clear_alias_audit_log
+ExecStart=/home/simplelogin/sl-app/.venv/bin/python3 cron.py -j clear_user_audit_log
+ExecStart=/home/simplelogin/sl-app/.venv/bin/python3 cron.py -j clear_alias_delete_on
+StandardOutput=journal
+StandardError=journal
+PrivateTmp=true
+NoNewPrivileges=true

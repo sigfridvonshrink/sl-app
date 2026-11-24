@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily SimpleLogin retention jobs
+# Not part of upstream. 05:15 is upstream's time for delete_logs, after the nightly
+# snapshots (00:00) and off-site sends (03:10). Not Persistent: a missed day is
+# caught by the next run.
+
+[Timer]
+OnCalendar=*-*-* 05:15:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target
